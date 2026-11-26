@@ -1,0 +1,17 @@
+{
+  "name": "@whatbox/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Framework-agnostic domain logic for the WhatBox platform: rules, services, repositories, seed data.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

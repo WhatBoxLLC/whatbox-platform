@@ -24,6 +24,7 @@ function local(): Promise<MemoryPlatform> {
       let snapshot: MemoryPlatformSnapshot | null = null;
       try { snapshot = raw ? JSON.parse(raw) : null; } catch { snapshot = null; }
       const mp: MemoryPlatform = await createMemoryPlatform({
+        rateLimitScale: 100, // the demo signs in as the same people over and over
         snapshot,
         exposeDevCodes: true,
         onChange: () => {

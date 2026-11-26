@@ -6,6 +6,7 @@ import type {
 } from './types';
 
 export interface AdminSession { token: string; adminId: string; expiresAt: string }
+export interface AdminChallenge { id: string; adminId: string; codeHash: string; expiresAt: string; attempts: number }
 export interface MemberSession { token: string; memberId: string; expiresAt: string }
 
 export interface ControlRepo {
@@ -18,6 +19,11 @@ export interface ControlRepo {
   saveAdminSession(s: AdminSession): Promise<void>;
   getAdminSession(token: string): Promise<AdminSession | null>;
   deleteAdminSession(token: string): Promise<void>;
+  saveAdminChallenge(c: AdminChallenge): Promise<void>;
+  getAdminChallenge(id: string): Promise<AdminChallenge | null>;
+  deleteAdminChallenge(id: string): Promise<void>;
+  // Fixed-window counter shared by every API instance: returns the count including this hit.
+  hit(key: string, windowSeconds: number, nowIso: string): Promise<number>;
 }
 
 // Coarse prefilter. Distance, custom fields, sorting and paging happen in the service.
@@ -105,6 +111,7 @@ export interface SiteRepo {
 export interface Notifier {
   // Sends a verification code. Dev/preview implementations just record it.
   sendCode(args: { site: Site; channel: 'email' | 'phone'; target: string; code: string }): Promise<void>;
+  sendAdminCode?(args: { email: string; code: string }): Promise<void>;
 }
 
 // Photo files. Each site has its own container, so a key from one site can never be read on another.

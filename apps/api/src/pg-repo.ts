@@ -1,7 +1,7 @@
 // PostgreSQL implementations of the core repositories.
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
-  AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Like, Pass, Member, MemberQuery, MemberSession,
+  AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Like, Pass, Member, MemberQuery, MemberSession,
   Message, ModerationItem, Photo, PrivateAccess, Report, ReviewStatus, Site, SiteRepo, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
@@ -39,6 +39,26 @@ export class PgControlRepo implements ControlRepo {
     return r ? { token: r.token, adminId: r.admin_id, expiresAt: new Date(r.expires_at).toISOString() } : null;
   }
   async deleteAdminSession(token: string) { await this.db.query('DELETE FROM admin_sessions WHERE token=$1', [token]); }
+  async saveAdminChallenge(c: AdminChallenge) {
+    await this.db.query(
+      `INSERT INTO admin_challenges (id, admin_id, code_hash, expires_at, attempts) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (id) DO UPDATE SET attempts=$5`,
+      [c.id, c.adminId, c.codeHash, c.expiresAt, c.attempts],
+    );
+  }
+  async getAdminChallenge(id: string): Promise<AdminChallenge | null> {
+    const r = (await this.db.query('SELECT * FROM admin_challenges WHERE id=$1', [id])).rows[0];
+    return r ? { id: r.id, adminId: r.admin_id, codeHash: r.code_hash, expiresAt: new Date(r.expires_at).toISOString(), attempts: r.attempts } : null;
+  }
+  async deleteAdminChallenge(id: string) { await this.db.query('DELETE FROM admin_challenges WHERE id=$1', [id]); }
+  async hit(key: string, windowSeconds: number, nowIso: string) {
+    const win = Math.floor(Date.parse(nowIso) / 1000 / windowSeconds);
+    const r = await this.db.query(
+      `INSERT INTO rate_limits (key, win, n) VALUES ($1,$2,1) ON CONFLICT (key, win) DO UPDATE SET n = rate_limits.n + 1 RETURNING n`,
+      [key, win],
+    );
+    return r.rows[0].n as number;
+  }
 }
 
 export function siteDbName(slug: string) {

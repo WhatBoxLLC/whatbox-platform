@@ -50,7 +50,7 @@ export class PublicController extends SiteScoped {
     return (await this.p.publicPage(await this.site(r), slug)) ?? null;
   }
   @Post('auth/start') async start(@Req() r: Request, @Body() b: { channel: 'email' | 'phone'; target: string }) {
-    return this.p.startVerification(await this.site(r), b.channel, String(b.target ?? ''));
+    return this.p.startVerification(await this.site(r), b.channel, String(b.target ?? ''), { ip: r.ip });
   }
   @Post('auth/verify') async verify(@Req() r: Request, @Body() b: { challengeId: string; code: string }) {
     return this.p.verifyCode(await this.site(r), String(b.challengeId), String(b.code));
@@ -130,7 +130,7 @@ export class SocialController extends SiteScoped {
 export class AdminController {
   constructor(@Inject(PLATFORM) private p: Platform) {}
   private admin(auth?: string) { return this.p.adminFromToken(bearer(auth)); }
-  @Post('auth/start') start(@Body() b: { email: string }) { return this.p.adminStart(String(b.email ?? '')); }
+  @Post('auth/start') start(@Req() r: Request, @Body() b: { email: string }) { return this.p.adminStart(String(b.email ?? ''), { ip: r.ip }); }
   @Post('auth/verify') verify(@Body() b: { challengeId: string; code: string }) { return this.p.adminVerify(String(b.challengeId), String(b.code)); }
   @Get('me') async me(@Headers('authorization') a: string) {
     const ad = await this.admin(a);

@@ -23,6 +23,23 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   expires_at  timestamptz NOT NULL
 );
 
+-- Owner Admin sign-in codes (hashed), shared by every API instance.
+CREATE TABLE IF NOT EXISTS admin_challenges (
+  id          text PRIMARY KEY,
+  admin_id    text NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  code_hash   text NOT NULL,
+  expires_at  timestamptz NOT NULL,
+  attempts    integer NOT NULL DEFAULT 0
+);
+
+-- Fixed-window rate limit counters (code sends, sign-ins). Old windows are pruned by the cleanup job.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key         text NOT NULL,
+  win         bigint NOT NULL,
+  n           integer NOT NULL,
+  PRIMARY KEY (key, win)
+);
+
 -- Metering for licensing (base fee + usage surcharges). Counts only, no content.
 CREATE TABLE IF NOT EXISTS usage_events (
   id       bigserial PRIMARY KEY,

@@ -263,3 +263,17 @@ test('new members get a boost in the blended feed', async () => {
   const newOnes = deck.filter((c) => c.isNew);
   assert.ok(newOnes.length > 0, 'seed has new members');
 });
+
+test('code sends are rate limited per address; admin codes are single-use and attempt-limited', async () => {
+  const mp = await createMemoryPlatform();
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  for (let i = 0; i < 5; i++) await api.startVerification('email', 'limit.me@example.com');
+  await assert.rejects(api.startVerification('email', 'Limit.Me@example.com'), (e: ApiError) => e.status === 429);
+  const admin = createLocalAdminApi(mp.platform);
+  const st = await admin.start(DEMO_OWNER_EMAIL);
+  for (let i = 0; i < 5; i++) await assert.rejects(admin.verify(st.challengeId, '000000' === st.devCode ? '111111' : '000000'));
+  await assert.rejects(admin.verify(st.challengeId, st.devCode!), /expired/);
+  const st2 = await admin.start(DEMO_OWNER_EMAIL);
+  await admin.verify(st2.challengeId, st2.devCode!);
+  await assert.rejects(admin.verify(st2.challengeId, st2.devCode!));
+});

@@ -1,8 +1,9 @@
-import { DevKeyProvider, type KeyProvider, Platform, type Notifier } from '@whatbox/core';
+import { DevKeyProvider, type KeyProvider, Platform } from '@whatbox/core';
 import { Pool } from 'pg';
 import { config, dbUrl } from './config';
 import { PgControlRepo, PgSiteRepo, siteDbName } from './pg-repo';
 import { createPhotoStore } from './photos';
+import { createNotifier } from './notify';
 
 const pools = new Map<string, Pool>();
 export function pool(dbName: string): Pool {
@@ -34,13 +35,6 @@ export function keyProvider(): KeyProvider {
   return new DevKeyProvider(config.devMasterKey);
 }
 
-const consoleNotifier: Notifier = {
-  async sendCode({ site, channel, target, code }) {
-    // Stub: in Azure this goes through Azure Communication Services (email + SMS).
-    const masked = channel === 'email' ? target.replace(/^(.).*@/, '$1•••@') : '•••' + target.slice(-2);
-    console.log(`[notify] ${site.slug} ${channel} ${masked} code=${config.exposeDevCodes ? code : '(hidden)'}`);
-  },
-};
 
 export function createPlatform() {
   const control = new PgControlRepo(pool(config.controlDb));
@@ -59,9 +53,10 @@ export function createPlatform() {
       return r;
     },
     keys: keyProvider(),
-    notifier: consoleNotifier,
+    notifier: createNotifier(),
     photos,
     exposeDevCodes: config.exposeDevCodes,
+    rateLimitScale: config.rateLimitScale,
   });
   return { platform, control, photos };
 }

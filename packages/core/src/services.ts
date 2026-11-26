@@ -1,6 +1,6 @@
 // The platform's use cases. Both the HTTP API and the in-browser preview call these,
 // so the rules a member hits are the same everywhere.
-import { DevKeyProvider, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
+import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { lookupPostal } from './geo';
 import type { ControlRepo, Clock, Notifier, PhotoStore, SiteRepo } from './repo';
 import { systemClock } from './repo';
@@ -23,6 +23,7 @@ export interface PlatformDeps {
   photos?: PhotoStore; // absent in the preview, which keeps data URIs
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
+  rateLimitScale?: number; // multiplies every rate limit; >1 only for local dev and test runs
   onChange?: () => void; // preview persistence hook
 }
 
@@ -78,7 +79,6 @@ function normalizeTarget(channel: 'email' | 'phone', raw: string): string {
 export class Platform {
   private keys: KeyProvider;
   private clock: Clock;
-  private adminChallenges = new Map<string, { adminId: string; code: string; expiresAt: number }>();
 
   constructor(private deps: PlatformDeps) {
     this.keys = deps.keys ?? new DevKeyProvider('dev-only-master-key');
@@ -124,10 +124,13 @@ export class Platform {
 
   // ---------------- Verification and sessions ----------------
 
-  async startVerification(site: Site, channel: 'email' | 'phone', rawTarget: string) {
+  async startVerification(site: Site, channel: 'email' | 'phone', rawTarget: string, meta: { ip?: string } = {}) {
     const target = normalizeTarget(channel, rawTarget);
     const repo = await this.repo(site);
     const crypto = this.crypto(site);
+    // Codes cost money (SMS especially) and invite pumping fraud, so cap them per address and per network.
+    await this.limit(`code:${site.id}:${await crypto.lookupHash(target)}`, 3600, 5, 'Too many codes sent to this address. Try again in an hour.');
+    if (meta.ip) await this.limit(`code-ip:${meta.ip}`, 3600, channel === 'phone' ? 10 : 30, 'Too many sign-in attempts from this network. Try again later.');
     const code = randomCode();
     const id = randomId('vc_');
     await repo.saveChallenge({
@@ -888,19 +891,43 @@ export class Platform {
 
   // ---------------- Owner Admin ----------------
 
-  async adminStart(email: string) {
-    const admin = await this.deps.control.getAdminByEmail(email.trim());
+  async adminStart(email: string, meta: { ip?: string } = {}) {
+    const clean = email.trim().toLowerCase();
+    await this.limit(`admin-code:${clean}`, 3600, 5, 'Too many codes requested. Try again in an hour.');
+    if (meta.ip) await this.limit(`admin-ip:${meta.ip}`, 3600, 20, 'Too many sign-in attempts from this network. Try again later.');
+    const admin = await this.deps.control.getAdminByEmail(clean);
     // same response either way so the form does not reveal which emails are admins
     const id = randomId('ac_');
     const code = randomCode();
-    if (admin) this.adminChallenges.set(id, { adminId: admin.id, code, expiresAt: this.now().getTime() + CODE_TTL_MS });
+    if (admin) {
+      await this.deps.control.saveAdminChallenge({
+        id, adminId: admin.id, codeHash: await this.adminCodeHash(id, code),
+        expiresAt: new Date(this.now().getTime() + CODE_TTL_MS).toISOString(), attempts: 0,
+      });
+      await this.deps.notifier.sendAdminCode?.({ email: admin.email, code });
+    }
     return { challengeId: id, devCode: this.deps.exposeDevCodes && admin ? code : undefined };
   }
 
+  private async adminCodeHash(id: string, code: string) {
+    return hmacHex(await this.keys.siteKey('__admin__'), `admin-code:${id}:${code}`);
+  }
+
+  private async limit(key: string, windowSeconds: number, max: number, message: string) {
+    const n = await this.deps.control.hit(key, windowSeconds, this.iso());
+    if (n > max * (this.deps.rateLimitScale ?? 1)) throw new RuleError('rate_limited', message, 429);
+  }
+
   async adminVerify(challengeId: string, code: string) {
-    const c = this.adminChallenges.get(challengeId);
-    if (!c || c.expiresAt < this.now().getTime() || c.code !== code.trim()) throw new RuleError('code_wrong', 'That code does not match.');
-    this.adminChallenges.delete(challengeId);
+    const c = await this.deps.control.getAdminChallenge(challengeId);
+    if (!c || Date.parse(c.expiresAt) < this.now().getTime() || c.attempts >= CODE_MAX_ATTEMPTS) {
+      throw new RuleError('code_wrong', 'That code has expired. Ask for a new one.');
+    }
+    if (c.codeHash !== (await this.adminCodeHash(challengeId, code.trim()))) {
+      await this.deps.control.saveAdminChallenge({ ...c, attempts: c.attempts + 1 });
+      throw new RuleError('code_wrong', 'That code does not match.');
+    }
+    await this.deps.control.deleteAdminChallenge(challengeId);
     const token = 'adm.' + randomId();
     await this.deps.control.saveAdminSession({ token, adminId: c.adminId, expiresAt: new Date(this.now().getTime() + SESSION_TTL_MS).toISOString() });
     this.changed();

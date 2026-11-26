@@ -21,6 +21,7 @@ export async function createMemoryPlatform(opts: {
   clock?: Clock;
   exposeDevCodes?: boolean;
   masterKey?: string;
+  rateLimitScale?: number;
 } = {}): Promise<MemoryPlatform> {
   const keys = new DevKeyProvider(opts.masterKey ?? 'preview-master-key');
   const now = opts.clock?.now() ?? new Date();
@@ -53,7 +54,7 @@ export async function createMemoryPlatform(opts: {
       if (!r) { r = new MemorySiteRepo(); sites.set(id, r); }
       return r;
     },
-    keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange,
+    keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange, rateLimitScale: opts.rateLimitScale,
   });
 
   return {

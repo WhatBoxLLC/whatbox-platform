@@ -1,7 +1,7 @@
 // In-memory repositories. Used by tests and by the browser preview, where state is
 // snapshotted to localStorage. Each site gets its own MemorySiteRepo instance, mirroring
 // the one-database-per-site layout of production.
-import type { AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
+import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
 import type {
   AdminUser, Block, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
   PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
@@ -40,6 +40,18 @@ export class MemoryControlRepo implements ControlRepo {
   async saveAdminSession(s: AdminSession) { this.sessions.push(clone(s)); }
   async getAdminSession(token: string) { return clone(this.sessions.find((s) => s.token === token) ?? null); }
   async deleteAdminSession(token: string) { this.sessions = this.sessions.filter((s) => s.token !== token); }
+  private challenges = new Map<string, AdminChallenge>();
+  private counters = new Map<string, { window: number; n: number }>();
+  async saveAdminChallenge(c: AdminChallenge) { this.challenges.set(c.id, clone(c)); }
+  async getAdminChallenge(id: string) { return clone(this.challenges.get(id) ?? null); }
+  async deleteAdminChallenge(id: string) { this.challenges.delete(id); }
+  async hit(key: string, windowSeconds: number, nowIso: string) {
+    const window = Math.floor(Date.parse(nowIso) / 1000 / windowSeconds);
+    const c = this.counters.get(key);
+    const n = c && c.window === window ? c.n + 1 : 1;
+    this.counters.set(key, { window, n });
+    return n;
+  }
 }
 
 export interface SiteSnapshot {

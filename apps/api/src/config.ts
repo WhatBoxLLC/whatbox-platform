@@ -10,8 +10,12 @@ export const config = {
   devMasterKey: process.env.DEV_MASTER_KEY ?? '',
   siteKeysJson: process.env.SITE_KEYS_JSON ?? '', // {"site_afterh":"<64 hex chars>", ...}
   exposeDevCodes: process.env.EXPOSE_DEV_CODES === 'true',
+  rateLimitScale: Number(process.env.RATE_LIMIT_SCALE ?? 1), // dev/test only
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:8081,http://localhost:3000').split(','),
   notifier: process.env.NOTIFIER ?? 'console', // console | acs (Azure Communication Services)
+  acsConnectionString: process.env.ACS_CONNECTION_STRING ?? '',
+  acsEmailFromJson: process.env.ACS_EMAIL_FROM_JSON ?? '', // {"site_afterh":"DoNotReply@mail.afterh.com","*":"..."}
+  acsSmsFromJson: process.env.ACS_SMS_FROM_JSON ?? '', // {"*":"+18005550100"}
   // Photos: local (dev disk), azure (Blob, container per site) or inline (prototype data URIs only)
   photoStore: (process.env.PHOTO_STORE ?? 'local') as 'local' | 'azure' | 'inline',
   photoDir: process.env.PHOTO_DIR ?? './.data/photos',

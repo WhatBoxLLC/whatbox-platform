@@ -12,3 +12,4 @@ preview-dist/
 .next/
 next-env.d.ts
 *.tsbuildinfo
+.data/

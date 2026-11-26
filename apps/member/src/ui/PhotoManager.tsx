@@ -3,6 +3,7 @@ import { ApiError, TONES, type MyProfile, type PhotoKind, type PhotoRating, type
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
+import { IS_PREVIEW } from '../lib/backend';
 import { useSession } from '../lib/session';
 import { Badge, Btn, Chip, ErrorText, H, Icon, PhotoTile, Txt, useTheme } from './kit';
 
@@ -30,10 +31,11 @@ export function PhotoManager({ only }: { only?: PhotoKind[] }) {
       const tone = TONES[Math.floor(Math.random() * TONES.length)];
       return run(() => api.addPhoto({ kind, tone }));
     }
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.5, base64: true, allowsEditing: true, aspect: [1, 1] });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: IS_PREVIEW ? 0.5 : 0.9, base64: IS_PREVIEW, allowsEditing: true, aspect: [1, 1] });
     if (res.canceled || !res.assets?.[0]) return;
     const a = res.assets[0];
-    const url = a.base64 ? `data:${a.mimeType ?? 'image/jpeg'};base64,${a.base64}` : a.uri;
+    // The preview keeps a data URI in the browser; the real app uploads the file itself.
+    const url = IS_PREVIEW && a.base64 ? `data:${a.mimeType ?? 'image/jpeg'};base64,${a.base64}` : a.uri;
     return run(() => api.addPhoto({ kind, url }));
   }
 
@@ -45,9 +47,11 @@ export function PhotoManager({ only }: { only?: PhotoKind[] }) {
             <Icon name="plus" color={t.accent} />
             <Txt size={12} bold color={t.accent}>Upload</Txt>
           </Pressable>
-          <Pressable accessibilityLabel={`Add a sample ${kind} photo`} onPress={() => add(kind, 'sample')}>
-            <Txt size={11} sub>or use a sample</Txt>
-          </Pressable>
+          {IS_PREVIEW ? (
+            <Pressable accessibilityLabel={`Add a sample ${kind} photo`} onPress={() => add(kind, 'sample')}>
+              <Txt size={11} sub>or use a sample</Txt>
+            </Pressable>
+          ) : null}
         </View>
       );
     }
@@ -98,7 +102,7 @@ export function PhotoManager({ only }: { only?: PhotoKind[] }) {
             )}
             <View style={{ gap: 8, flex: 1 }}>
               <Btn label={main ? 'Replace from device' : 'Upload from device'} icon="image" size="sm" onPress={() => add('main', 'device')} busy={busy} />
-              <Btn label="Use a sample photo" kind="secondary" size="sm" onPress={() => add('main', 'sample')} />
+              {IS_PREVIEW ? <Btn label="Use a sample photo" kind="secondary" size="sm" onPress={() => add('main', 'sample')} /> : null}
             </View>
           </View>
         </View>

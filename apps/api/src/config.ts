@@ -12,6 +12,14 @@ export const config = {
   exposeDevCodes: process.env.EXPOSE_DEV_CODES === 'true',
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:8081,http://localhost:3000').split(','),
   notifier: process.env.NOTIFIER ?? 'console', // console | acs (Azure Communication Services)
+  // Photos: local (dev disk), azure (Blob, container per site) or inline (prototype data URIs only)
+  photoStore: (process.env.PHOTO_STORE ?? 'local') as 'local' | 'azure' | 'inline',
+  photoDir: process.env.PHOTO_DIR ?? './.data/photos',
+  publicApiUrl: (process.env.PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, ''),
+  fileUrlSecret: process.env.FILE_URL_SECRET ?? '',
+  azureStorageAccount: process.env.AZURE_STORAGE_ACCOUNT ?? '',
+  azureStorageKey: process.env.AZURE_STORAGE_KEY ?? '',
+  azureStorageJson: process.env.AZURE_STORAGE_JSON ?? '', // optional storage account per site
 };
 
 export function dbUrl(dbName: string) {

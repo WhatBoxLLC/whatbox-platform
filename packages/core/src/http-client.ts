@@ -6,10 +6,11 @@ type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 function makeRequest(baseUrl: string, headers: () => Record<string, string>) {
   return async function req<T>(method: Method, path: string, body?: unknown): Promise<T> {
+    const form = typeof FormData !== 'undefined' && body instanceof FormData;
     const res = await fetch(baseUrl.replace(/\/$/, '') + path, {
       method,
-      headers: { 'Content-Type': 'application/json', ...headers() },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: form ? headers() : { 'Content-Type': 'application/json', ...headers() },
+      body: body === undefined ? undefined : form ? (body as FormData) : JSON.stringify(body),
     });
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;
@@ -39,7 +40,16 @@ export function createHttpMemberApi(baseUrl: string, siteKey: string, platform: 
     signOut: async () => { await req('POST', '/v1/auth/sign-out'); token = null; },
     me: () => req('GET', '/v1/me'),
     updateMe: (patch) => req('PATCH', '/v1/me', patch),
-    addPhoto: (input) => req('POST', '/v1/me/photos', input),
+    addPhoto: async (input) => {
+      if (!input.url) return req('POST', '/v1/me/photos', input);
+      // Real files go up as multipart. The web passes a data: or blob: URI; native passes a file:// URI.
+      const fd = new FormData();
+      fd.append('kind', input.kind);
+      if (input.rating) fd.append('rating', input.rating);
+      if (typeof document !== 'undefined') fd.append('file', await (await fetch(input.url)).blob(), 'photo');
+      else fd.append('file', { uri: input.url, name: 'photo.jpg', type: 'image/jpeg' } as unknown as Blob);
+      return req('POST', '/v1/me/photos/upload', fd);
+    },
     updatePhoto: (id, patch) => req('PATCH', '/v1/me/photos/' + id, patch),
     deletePhoto: (id) => req('DELETE', '/v1/me/photos/' + id),
     setTier: (tier) => req('POST', '/v1/me/tier', { tier }),

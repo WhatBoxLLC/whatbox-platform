@@ -107,5 +107,12 @@ export interface Notifier {
   sendCode(args: { site: Site; channel: 'email' | 'phone'; target: string; code: string }): Promise<void>;
 }
 
+// Photo files. Each site has its own container, so a key from one site can never be read on another.
+export interface PhotoStore {
+  put(site: Site, key: string, data: Uint8Array, contentType: string): Promise<void>;
+  delete(site: Site, key: string): Promise<void>;
+  readUrl(site: Site, key: string): string; // short-lived signed URL
+}
+
 export interface Clock { now(): Date }
 export const systemClock: Clock = { now: () => new Date() };

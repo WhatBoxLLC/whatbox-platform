@@ -146,7 +146,8 @@ export interface Photo {
   kind: PhotoKind;
   rating: PhotoRating;
   status: ReviewStatus;
-  url?: string; // real image (blob URL or data URI in the preview)
+  url?: string; // data URI in the preview only
+  blobKey?: string; // object key in the site's photo store (production)
   tone?: [string, string]; // seeded placeholder silhouette colors
   sort: number;
   createdAt: string;

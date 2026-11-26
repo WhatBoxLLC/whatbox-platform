@@ -2,7 +2,7 @@
 // so the rules a member hits are the same everywhere.
 import { DevKeyProvider, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { lookupPostal } from './geo';
-import type { ControlRepo, Clock, Notifier, SiteRepo } from './repo';
+import type { ControlRepo, Clock, Notifier, PhotoStore, SiteRepo } from './repo';
 import { systemClock } from './repo';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
@@ -20,6 +20,7 @@ export interface PlatformDeps {
   siteRepo(siteId: string): SiteRepo | Promise<SiteRepo>;
   keys?: KeyProvider;
   notifier: Notifier;
+  photos?: PhotoStore; // absent in the preview, which keeps data URIs
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
   onChange?: () => void; // preview persistence hook
@@ -52,6 +53,7 @@ const SESSION_TTL_MS = 30 * 86_400_000;
 const NAME_MAX = 24;
 const ABOUT_MAX = 2000;
 const MESSAGE_MAX = 2000;
+const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
 function maskTarget(channel: 'email' | 'phone', target: string): string {
   if (channel === 'email') {
@@ -215,7 +217,12 @@ export class Platform {
       rating: p.rating, platform: ctx.platform, viewerHidesExplicit: opts.owner ? false : ctx.me.hideExplicit,
     });
     if (vis !== 'show') return { ...base, placeholder: vis };
-    return { ...base, url: p.url, tone: p.tone };
+    return { ...base, url: this.fileUrl(ctx.site, p), tone: p.tone };
+  }
+
+  private fileUrl(site: Site, p: Photo): string | undefined {
+    if (p.blobKey) return this.deps.photos?.readUrl(site, p.blobKey);
+    return p.url;
   }
 
   private visibleToOthers(site: Site, p: Photo) {
@@ -347,10 +354,20 @@ export class Platform {
     }
   }
 
-  async addPhoto(ctx: MemberCtx, input: { kind: PhotoKind; rating?: PhotoRating; url?: string; tone?: [string, string] }) {
+  async addPhoto(ctx: MemberCtx, input: { kind: PhotoKind; rating?: PhotoRating; url?: string; tone?: [string, string]; file?: { data: Uint8Array; contentType: string } }) {
     const rating = input.rating ?? 'safe';
     const existing = await ctx.repo.listPhotos(ctx.me.id);
     checkPhotoAllowed(ctx.site, input.kind, rating, existing);
+    const id = randomId('ph_');
+    let blobKey: string | undefined;
+    if (input.file) {
+      if (!this.deps.photos) throw new RuleError('no_storage', 'Photo storage is not configured.', 500);
+      if (input.file.data.byteLength > PHOTO_MAX_BYTES) throw new RuleError('too_big', 'Photos can be up to 10 MB.', 413);
+      blobKey = `${ctx.me.id}/${id}`;
+      await this.deps.photos.put(ctx.site, blobKey, input.file.data, input.file.contentType);
+    } else if (this.deps.photos && input.url) {
+      throw new RuleError('upload_required', 'Upload the photo file.', 400);
+    }
     if (input.kind === 'main') {
       const oldMain = existing.find((p) => p.kind === 'main');
       if (oldMain) {
@@ -359,8 +376,8 @@ export class Platform {
       }
     }
     const photo: Photo = {
-      id: randomId('ph_'), memberId: ctx.me.id, kind: input.kind, rating, status: 'pending',
-      url: input.url, tone: input.tone, sort: Date.now(), createdAt: this.iso(),
+      id, memberId: ctx.me.id, kind: input.kind, rating, status: 'pending',
+      url: blobKey ? undefined : input.url, blobKey, tone: input.tone, sort: Date.now(), createdAt: this.iso(),
     };
     await ctx.repo.savePhoto(photo);
     await ctx.repo.saveModeration({
@@ -394,6 +411,7 @@ export class Platform {
     const p = await ctx.repo.getPhoto(id);
     if (!p || p.memberId !== ctx.me.id) throw new RuleError('not_found', 'Photo not found.', 404);
     await ctx.repo.deletePhoto(id);
+    if (p.blobKey) await this.deps.photos?.delete(ctx.site, p.blobKey);
     this.changed();
     return this.myProfile(ctx);
   }
@@ -928,7 +946,7 @@ export class Platform {
       const v: ModerationView = { ...i, memberName: members.get(i.memberId)?.displayName || 'New member' };
       if (i.kind === 'photo') {
         const p = await repo.getPhoto(i.refId);
-        if (p) v.photo = { id: p.id, kind: p.kind, rating: p.rating, status: p.status, url: p.url, tone: p.tone };
+        if (p) v.photo = { id: p.id, kind: p.kind, rating: p.rating, status: p.status, url: this.fileUrl(site, p), tone: p.tone };
       }
       if (i.kind === 'message') v.messageBody = (await repo.getMessage(i.refId))?.body;
       out.push(v);

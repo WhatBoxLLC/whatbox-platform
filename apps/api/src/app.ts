@@ -1,9 +1,11 @@
 // NestJS HTTP layer. Controllers are thin: resolve the site and session, call the shared Platform.
 import {
   ArgumentsHost, Body, Catch, Controller, Delete, ExceptionFilter, Get, Global, Headers, HttpException, Inject, Module,
-  Param, Patch, Post, Put, Query, Req,
+  Param, Patch, Post, Put, Query, Req, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
-import { type ClientPlatform, type ContentPage, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { normalizeImage } from './photos';
+import { type ClientPlatform, type ContentPage, type PhotoKind, type PhotoRating, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
 import type { Request, Response } from 'express';
 
 export const PLATFORM = 'PLATFORM';
@@ -66,9 +68,16 @@ export class MeController extends SiteScoped {
   @Get() async me(@Req() r: Request) { return this.p.myProfile(await this.ctx(r)); }
   @Patch() async update(@Req() r: Request, @Body() b: any) { return this.p.updateProfile(await this.ctx(r), b); }
   @Post('photos') async addPhoto(@Req() r: Request, @Body() b: any) {
-    // Prototype keeps data URIs inline. Production uploads go to the site's own Blob container
-    // via a short-lived SAS URL, and only the blob path is stored here.
+    // JSON route: placeholder tones (tests) or data URIs when PHOTO_STORE=inline. Real files use /photos/upload.
     return this.p.addPhoto(await this.ctx(r), { kind: b.kind, rating: b.rating, url: b.url, tone: b.tone });
+  }
+  @Post('photos/upload')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
+  async uploadPhoto(@Req() r: Request, @UploadedFile() file: { buffer: Buffer } | undefined, @Body() b: { kind?: string; rating?: string }) {
+    const ctx = await this.ctx(r);
+    if (!file?.buffer?.length) throw new RuleError('no_file', 'Choose a photo to upload.');
+    const img = await normalizeImage(file.buffer);
+    return this.p.addPhoto(ctx, { kind: b.kind as PhotoKind, rating: b.rating as PhotoRating, file: img });
   }
   @Patch('photos/:id') async updPhoto(@Req() r: Request, @Param('id') id: string, @Body() b: any) {
     return this.p.updatePhoto(await this.ctx(r), id, { kind: b.kind, rating: b.rating });

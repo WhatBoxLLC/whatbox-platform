@@ -2,6 +2,7 @@ import { DevKeyProvider, type KeyProvider, Platform, type Notifier } from '@what
 import { Pool } from 'pg';
 import { config, dbUrl } from './config';
 import { PgControlRepo, PgSiteRepo, siteDbName } from './pg-repo';
+import { createPhotoStore } from './photos';
 
 const pools = new Map<string, Pool>();
 export function pool(dbName: string): Pool {
@@ -44,6 +45,7 @@ const consoleNotifier: Notifier = {
 export function createPlatform() {
   const control = new PgControlRepo(pool(config.controlDb));
   const siteRepos = new Map<string, PgSiteRepo>();
+  const photos = createPhotoStore();
   const platform = new Platform({
     control,
     async siteRepo(siteId) {
@@ -58,7 +60,8 @@ export function createPlatform() {
     },
     keys: keyProvider(),
     notifier: consoleNotifier,
+    photos,
     exposeDevCodes: config.exposeDevCodes,
   });
-  return { platform, control };
+  return { platform, control, photos };
 }

@@ -1,5 +1,6 @@
 // End-to-end check against a running API: the same client the app uses, over HTTP.
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 import { createHttpAdminApi, createHttpMemberApi, DEMO_MEMBER_EMAIL, DEMO_OWNER_EMAIL } from '@whatbox/core';
 
 const base = process.env.API_URL ?? 'http://localhost:4000';
@@ -46,6 +47,29 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   const other = createHttpMemberApi(base, 'hfriends', 'web');
   other.setToken(token);
   await assert.rejects(other.me());
+
+  // Real upload: re-encoded, GPS and other metadata stripped, served from a signed URL
+  const jpg = await sharp({ create: { width: 2400, height: 1800, channels: 3, background: '#7FA39B' } })
+    .withExif({ IFD0: { Copyright: 'SECRET-EXIF-MARKER' } }).jpeg().toBuffer();
+  assert.ok(jpg.includes('SECRET-EXIF-MARKER'));
+  const fd = new FormData();
+  fd.append('kind', 'public');
+  fd.append('file', new Blob([jpg], { type: 'image/jpeg' }), 'x.jpg');
+  const up = await fetch(base + '/v1/me/photos/upload', { method: 'POST', body: fd, headers: { 'X-Site': 'afterh', Authorization: 'Bearer ' + token } });
+  assert.equal(up.status, 201, await up.clone().text());
+  const mine = (await up.json()) as Awaited<ReturnType<typeof api.me>>;
+  const added = mine.photos.at(-1)!;
+  assert.ok(added.url?.includes('/files/afterh/'), added.url);
+  const img = Buffer.from(await (await fetch(added.url!)).arrayBuffer());
+  const meta = await sharp(img).metadata();
+  assert.ok(meta.width! <= 1600 && !meta.exif && !img.includes('SECRET-EXIF-MARKER'));
+  assert.equal((await fetch(added.url!.replace(/s=[^&]+/, 's=forged'))).status, 404);
+  const bad = new FormData();
+  bad.append('kind', 'public');
+  bad.append('file', new Blob(['not an image'], { type: 'image/jpeg' }), 'x.jpg');
+  assert.equal((await fetch(base + '/v1/me/photos/upload', { method: 'POST', body: bad, headers: { 'X-Site': 'afterh', Authorization: 'Bearer ' + token } })).status, 415);
+  await api.deletePhoto(added.id);
+  assert.equal((await fetch(added.url!)).status, 404);
 
   // Explicit-photo rule enforced server-side
   await assert.rejects(api.addPhoto({ kind: 'private', rating: 'explicit' }));

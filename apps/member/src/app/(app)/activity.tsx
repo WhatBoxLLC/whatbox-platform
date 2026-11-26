@@ -1,88 +1,148 @@
-import type { ActivityList } from '@whatbox/core';
+// Activity: "Liked you" is built for busy inboxes. Priority likes come first, then people who fit
+// what you asked for, then serious profiles. Quick filters and one-tap like back or pass.
+import type { ActivityList, ActivityPerson, Tier } from '@whatbox/core';
+import { TONES } from '@whatbox/core';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSession } from '../../lib/session';
-import { TONES } from '@whatbox/core';
-import { Badge, Btn, Card, Grid, H, Icon, Loading, Notice, PhotoTile, relTime, Segmented, Silhouette, Txt, useTheme } from '../../ui/kit';
+import { Badge, Btn, Card, Chip, Grid, H, Icon, Loading, Notice, PhotoTile, relTime, Segmented, Silhouette, Txt, useTheme } from '../../ui/kit';
 
 type Kind = 'likes' | 'views' | 'mine';
+type Quick = 'all' | 'vip' | 'fits' | 'serious' | 'new';
+const QUICK: { value: Quick; label: string; test: (p: ActivityPerson) => boolean }[] = [
+  { value: 'all', label: 'All', test: () => true },
+  { value: 'vip', label: '★ VIP', test: (p) => p.vip },
+  { value: 'fits', label: 'Fits my preferences', test: (p) => p.fitsMe },
+  { value: 'serious', label: 'Verified with photo', test: (p) => p.serious },
+  { value: 'new', label: 'New here', test: (p) => p.isNew },
+];
 
 export default function Activity() {
   const { api, me, setMe, site } = useSession();
   const t = useTheme();
   const [kind, setKind] = useState<Kind>('likes');
+  const [quick, setQuick] = useState<Quick>('all');
   const [lists, setLists] = useState<Partial<Record<Kind, ActivityList>>>({});
-  const [checkout, setCheckout] = useState(false);
+  const [done, setDone] = useState<Record<string, 'liked' | 'passed'>>({});
+  const [checkout, setCheckout] = useState<Tier | null>(null);
+  const ms = site.membership;
+  const tier = me?.member.tier ?? 'free';
 
   const load = useCallback(async () => {
     const [likes, views, mine] = await Promise.all([api.activity('likes'), api.activity('views'), api.activity('mine')]);
     setLists({ likes, views, mine });
   }, [api]);
-  useEffect(() => { load(); }, [load, me?.member.premium]);
+  useEffect(() => { load(); }, [load, tier, me?.paywallEnabled]);
 
   const list = lists[kind];
+  const shown = useMemo(() => {
+    if (!list) return [];
+    const q = QUICK.find((x) => x.value === quick)!;
+    return list.people.filter((p) => kind !== 'likes' || q.test(p));
+  }, [list, quick, kind]);
+
+  async function likeBack(p: ActivityPerson) {
+    const r = await api.like(p.id, true);
+    setDone((d) => ({ ...d, [p.id]: 'liked' }));
+    if (r.mutual) router.push(`/messages/${p.id}`);
+  }
+  async function pass(p: ActivityPerson) {
+    await api.pass(p.id);
+    setDone((d) => ({ ...d, [p.id]: 'passed' }));
+  }
+
+  const upTier: Tier = ms.tiers.paid.seeLikesFrom.length === 3 ? 'paid' : 'vip';
+  const counts = list && kind === 'likes' ? Object.fromEntries(QUICK.map((q) => [q.value, list.people.filter(q.test).length])) : {};
+
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
-      <View style={{ maxWidth: 900, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingTop: 24, gap: 18 }}>
+      <View style={{ maxWidth: 900, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingTop: 24, gap: 16 }}>
         <H size={30}>Activity</H>
-        <Segmented<Kind> value={kind} onChange={setKind} options={[
+        <Segmented<Kind> value={kind} onChange={(k) => { setKind(k); setQuick('all'); }} options={[
           { value: 'likes', label: `Liked you${lists.likes ? ' · ' + lists.likes.total : ''}` },
           { value: 'views', label: `Viewed${lists.views ? ' · ' + lists.views.total : ''}` },
           { value: 'mine', label: 'Your likes' },
         ]} />
-        {!list ? <Loading /> : list.locked ? (
-          <View style={{ position: 'relative', minHeight: 560 }}>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }} aria-hidden>
-              {Array.from({ length: Math.min(8, Math.max(4, list.total)) }).map((_, i) => (
-                <View key={i} style={{ width: '48%', maxWidth: 210, height: 180, borderRadius: 16, overflow: 'hidden', position: 'relative' }}>
-                  <View style={[{ position: 'absolute', inset: 0 } as any, Platform.OS === 'web' ? ({ filter: 'blur(9px)' } as any) : { opacity: 0.5 }]}>
-                    <Silhouette bg={TONES[i % 6][0]} fg={TONES[i % 6][1]} size="80%" />
-                  </View>
-                  <View style={{ position: 'absolute', left: 10, bottom: 10, width: 70, height: 12, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.75)' }} />
+
+        {kind === 'likes' && list && list.people.length > 0 ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }} role="toolbar" aria-label="Quick filters">
+            {QUICK.map((q) => <Chip key={q.value} label={`${q.label} ${counts[q.value] ?? 0}`} selected={quick === q.value} onPress={() => setQuick(q.value)} />)}
+          </View>
+        ) : null}
+
+        {!list ? <Loading /> : (
+          <>
+            {list.hidden > 0 ? (
+              <Card style={{ gap: 12, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                <View style={{ flexDirection: 'row', gap: -16 } as any} aria-hidden>
+                  {Array.from({ length: Math.min(4, list.hidden) }).map((_, i) => (
+                    <View key={i} style={{ width: 48, height: 48, borderRadius: 24, overflow: 'hidden', borderWidth: 2, borderColor: t.surface, marginLeft: i ? -14 : 0 }}>
+                      <View style={[{ position: 'absolute', inset: 0 } as any, Platform.OS === 'web' ? ({ filter: 'blur(5px)' } as any) : { opacity: 0.5 }]}>
+                        <Silhouette bg={TONES[i % 6][0]} fg={TONES[i % 6][1]} size="90%" />
+                      </View>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
-            <View style={{ position: 'absolute', left: 0, right: 0, top: 120, alignItems: 'center' }}>
-              <View style={{ width: '100%', maxWidth: 380, backgroundColor: t.surface, borderRadius: 22, padding: 24, gap: 12, alignItems: 'center', shadowColor: '#1E2629', shadowOpacity: 0.22, shadowRadius: 50, shadowOffset: { width: 0, height: 20 } }}>
-                <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: t.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
-                  <Icon name="lock" size={26} color={t.accent} />
+                <View style={{ flex: 1, minWidth: 200, gap: 2 }}>
+                  <Txt bold>{list.hidden} more {list.hidden === 1 ? 'person' : 'people'} {kind === 'likes' ? 'liked' : 'viewed'} you</Txt>
+                  <Txt sub size={14}>{kind === 'likes' ? `You can always see likes from ${ms.tiers.vip.label} members. ` : ''}Upgrade to see everyone.</Txt>
                 </View>
-                <H size={23} level={2} style={{ textAlign: 'center' }}>{list.total} {list.total === 1 ? 'person' : 'people'} {kind === 'likes' ? (list.total === 1 ? 'likes' : 'like') : (list.total === 1 ? 'viewed' : 'viewed')} you</H>
-                <Txt sub center size={15}>Upgrade to see who they are, like them back, and start chatting first.</Txt>
                 {checkout ? (
                   <View style={{ width: '100%', gap: 10 }}>
-                    <Notice tone="warn" title="Prototype checkout">{`No payment is taken. The real build hands off to ${site.slug === 'afterh' ? 'PayPal' : 'the site\'s processor'} and your statement shows "${site.billingDescriptor}".`}</Notice>
-                    <Btn label="Confirm upgrade" size="lg" onPress={async () => { setMe(await api.upgrade(true)); setCheckout(false); }} />
+                    <Notice tone="warn" title="Prototype checkout">{`No payment is taken. The real build hands off to the site's processor and your statement shows "${site.billingDescriptor}".`}</Notice>
+                    <Btn label={`Confirm ${ms.tiers[checkout].label}`} onPress={async () => { setMe(await api.setTier(checkout)); setCheckout(null); }} />
                   </View>
                 ) : (
-                  <Btn label={`See who ${kind === 'likes' ? 'likes' : 'viewed'} you · ${list.priceLabel}`} size="lg" style={{ alignSelf: 'stretch' }} onPress={() => setCheckout(true)} />
+                  <Btn size="sm" label={list.upgradeLabel || `Upgrade to ${ms.tiers[upTier].label}`} onPress={() => setCheckout(upTier)} />
                 )}
-                <Pressable onPress={() => setKind('mine')}><Txt bold size={14} color={t.accent}>Maybe later</Txt></Pressable>
-              </View>
-            </View>
-          </View>
-        ) : list.people.length === 0 ? (
-          <Card style={{ alignItems: 'center', gap: 6 }}>
-            <Icon name="heart" size={28} color={t.sub} />
-            <Txt bold>Nothing here yet</Txt>
-            <Txt sub center>{kind === 'mine' ? 'Like someone from Browse and they will show up here.' : 'When people find you, they will show up here.'}</Txt>
-          </Card>
-        ) : (
-          <View style={{ gap: 12 }}>
-            {me?.member.premium && kind !== 'mine' ? <Notice tone="success" icon="star">You're on {site.name} Premium.</Notice> : null}
-            <Grid min={150} gap={12}>
-              {list.people.map((p) => (
-                <Pressable key={p.id} onPress={() => router.push(`/member/${p.id}`)} accessibilityLabel={`${p.displayName}, ${p.age}`}>
-                  <PhotoTile photo={p.mainPhoto} radius={16} style={{ height: 180 }}>
-                    {p.online ? <View style={{ position: 'absolute', top: 10, left: 10 }}><Badge label="Online" tone="online" /></View> : null}
-                  </PhotoTile>
-                  <Txt bold style={{ marginTop: 6 }}>{p.displayName}, {p.age}</Txt>
-                  <Txt sub size={13}>{p.city} · {relTime(p.at)}</Txt>
-                </Pressable>
-              ))}
-            </Grid>
-          </View>
+              </Card>
+            ) : null}
+
+            {shown.length === 0 ? (
+              <Card style={{ alignItems: 'center', gap: 6 }}>
+                <Icon name="heart" size={28} color={t.sub} />
+                <Txt bold>{list.people.length && quick !== 'all' ? 'No one in this filter' : 'Nothing here yet'}</Txt>
+                <Txt sub center>{kind === 'mine' ? 'Like someone from Discover and they will show up here.' : 'When people find you, they will show up here.'}</Txt>
+              </Card>
+            ) : (
+              <Grid min={190} gap={14}>
+                {shown.map((p) => (
+                  <View key={p.id} style={{ backgroundColor: t.surface, borderWidth: p.vip ? 2 : 1, borderColor: p.vip ? '#D9A43A' : t.line, borderRadius: 16, overflow: 'hidden', opacity: done[p.id] === 'passed' ? 0.45 : 1 }}>
+                    <Pressable onPress={() => router.push(`/member/${p.id}`)} accessibilityLabel={`${p.displayName}, ${p.age}. Open profile`}>
+                      <PhotoTile photo={p.mainPhoto} radius={0} style={{ height: 180 }}>
+                        <View style={{ position: 'absolute', top: 8, left: 8, gap: 4, alignItems: 'flex-start' }}>
+                          {p.vip ? <Badge label="★ VIP" tone="alert" /> : null}
+                          {p.online ? <Badge label="Online" tone="online" /> : null}
+                          {p.isNew ? <Badge label="New" /> : null}
+                        </View>
+                      </PhotoTile>
+                    </Pressable>
+                    <View style={{ padding: 10, gap: 2 }}>
+                      <Txt bold>{p.displayName}, {p.age}</Txt>
+                      <Txt sub size={13}>{p.city} · {relTime(p.at)}</Txt>
+                      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                        {p.fitsMe ? <Txt size={12} color={t.accent} bold>Fits you</Txt> : null}
+                        {p.serious ? <Txt size={12} color={t.accent} bold>Verified</Txt> : null}
+                      </View>
+                      {kind === 'likes' ? (
+                        p.likedBack || done[p.id] === 'liked' ? (
+                          <Btn size="sm" kind="soft" icon="chat" label="Say hello" style={{ marginTop: 8 }} onPress={() => router.push(`/messages/${p.id}`)} />
+                        ) : done[p.id] === 'passed' ? (
+                          <Txt sub size={13} style={{ marginTop: 8 }}>Passed</Txt>
+                        ) : (
+                          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                            <Btn size="sm" kind="secondary" icon="x" label="Pass" flex onPress={() => pass(p)} accessibilityLabel={`Pass on ${p.displayName}`} />
+                            <Btn size="sm" icon="heart" label="Like" flex onPress={() => likeBack(p)} accessibilityLabel={`Like ${p.displayName} back`} />
+                          </View>
+                        )
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </Grid>
+            )}
+          </>
         )}
       </View>
     </ScrollView>

@@ -82,7 +82,7 @@ export default function Onboarding() {
           </View>
           <PhotoManager only={['main', 'public']} />
           <Notice>New photos are reviewed by the {site.name} team. You can add private photos from your profile later.</Notice>
-          <Btn label={me.photos.length ? 'Start browsing' : 'Skip for now'} size="lg" onPress={() => router.replace('/browse')} />
+          <Btn label={me.photos.length ? 'Start discovering' : 'Skip for now'} size="lg" onPress={() => router.replace('/discover')} />
         </View>
       ) : null}
     </AuthFrame>

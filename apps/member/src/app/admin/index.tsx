@@ -2,7 +2,7 @@
 // Platform admins (WhatBox) see every site and can change a site's mode; owners see only their sites.
 import {
   ApiError, type AdminApi, type AdminMemberRow, type AdminSiteSummary, type ContentPage, type ModerationView,
-  type ProfileFieldDef, type Site, type SiteStats, type SiteTheme,
+  type ProfileFieldDef, type Site, type SiteStats, type SiteTheme, TIERS, type Tier, type TierPerms,
 } from '@whatbox/core';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -12,7 +12,7 @@ import { adminApi, IS_PREVIEW } from '../../lib/backend';
 import { storage } from '../../lib/storage';
 import {
   Avatar, Badge, Btn, Card, Check, Chip, ChipPicker, ErrorText, Field, fonts, H, Icon, Loading, Notice, PhotoTile,
-  relTime, ThemeOverrideProvider, Toggle, Txt, useTheme, useWide, type IconName,
+  relTime, Segmented, ThemeOverrideProvider, Toggle, Txt, useTheme, useWide, type IconName,
 } from '../../ui/kit';
 
 const ADMIN_THEME: SiteTheme = {
@@ -207,14 +207,14 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 
 function Overview({ stats, site, go }: { stats: SiteStats | null; site: Site; go: (t: Tab) => void }) {
   if (!stats) return <Loading />;
-  const pw = site.settings.paywall;
+  const ms = site.settings.membership;
   return (
     <View style={{ gap: 18 }}>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14 }}>
         <Stat label="Members" value={stats.members} />
         <Stat label="Active today" value={stats.activeToday} />
         <Stat label="New this week" value={stats.newThisWeek} />
-        <Stat label="Premium" value={stats.premium} />
+        <Stat label="Paid or VIP" value={stats.paid} />
         <Stat label="Messages today" value={stats.messagesToday} />
       </View>
       {stats.openModeration ? (
@@ -225,7 +225,7 @@ function Overview({ stats, site, go }: { stats: SiteStats | null; site: Site; go
       <Card style={{ gap: 10 }}>
         <H size={18} level={2}>How {site.name} is set up</H>
         <Txt sub size={15}>Mode: {site.settings.mode}. Photos are {site.settings.photoModeration === 'pre' ? 'hidden until approved' : 'visible right away and reviewed after'}. Payments: {site.settings.paymentProvider}.</Txt>
-        <Txt sub size={15}>Paywall: who liked you is {pw.whoLikedMe ? 'locked' : 'free'}, who viewed you is {pw.whoViewedMe ? 'locked' : 'free'}, starting conversations is {pw.initiateContact ? 'Premium only' : 'free'}.</Txt>
+        <Txt sub size={15}>Paywall: {ms.paywallEnabled ? `on, with ${TIERS.map((x) => ms.tiers[x].label).join(', ')} levels` : 'off, so every member has full access'}.</Txt>
         <Txt sub size={15}>Public teasers: {site.settings.mode === 'sensitive' ? 'never (sensitive site)' : site.settings.publicTeasers ? 'members can opt in' : 'off'}.</Txt>
       </Card>
     </View>
@@ -299,12 +299,14 @@ function Members({ api, siteId }: { api: AdminApi; siteId: string }) {
               <View style={{ flex: 1, minWidth: 180 }}>
                 <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                   <Txt bold>{m.displayName}{m.age ? `, ${m.age}` : ''}</Txt>
-                  {m.premium ? <Badge label="Premium" /> : null}
+                  {m.tier !== 'free' ? <Badge label={m.tier === 'vip' ? '★ VIP' : 'Paid'} tone={m.tier === 'vip' ? 'alert' : 'accent'} /> : null}
                   {m.status === 'suspended' ? <Badge label="Suspended" tone="alert" /> : null}
                   {m.reports ? <Badge label={`${m.reports} report${m.reports > 1 ? 's' : ''}`} tone="alert" /> : null}
                 </View>
                 <Txt sub size={13}>{m.city || 'No city yet'} · {m.photoCount} photos · joined {relTime(m.createdAt)} · active {relTime(m.lastActiveAt)}</Txt>
               </View>
+              <Segmented<Tier> value={m.tier} onChange={async (tier) => { await api.setMemberTier(siteId, m.id, tier); load(); }}
+                options={TIERS.map((x) => ({ value: x, label: x === 'free' ? 'Free' : x === 'paid' ? 'Paid' : 'VIP' }))} />
               <Btn size="sm" kind={m.status === 'active' ? 'danger' : 'secondary'} label={m.status === 'active' ? 'Suspend' : 'Reinstate'}
                 onPress={async () => { await api.setMemberStatus(siteId, m.id, m.status === 'active' ? 'suspended' : 'active'); load(); }} />
             </View>
@@ -439,7 +441,6 @@ function Pages({ api, site }: { api: AdminApi; site: Site }) {
 function Settings({ api, site, onSite, role }: { api: AdminApi; site: Site; onSite: (s: Site) => void; role: 'platform' | 'owner' }) {
   const [error, setError] = useState<string | null>(null);
   const [accent, setAccent] = useState(site.theme.accent);
-  const [price, setPrice] = useState(site.settings.premiumPriceLabel);
   const [descriptor, setDescriptor] = useState(site.settings.billingDescriptor);
   const lim = site.settings.messageLimits;
   const [limits, setLimits] = useState({ a: String(lim.newConversationsPerHour), b: String(lim.messagesPerMinute), c: String(lim.duplicateRecipientThreshold) });
@@ -447,7 +448,6 @@ function Settings({ api, site, onSite, role }: { api: AdminApi; site: Site; onSi
     setError(null);
     try { onSite(await api.updateSite(site.id, patch)); } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not save.'); }
   };
-  const pw = site.settings.paywall;
   const section = (title: string, children: ReactNode, hint?: string) => (
     <Card style={{ gap: 10 }}>
       <H size={18} level={2}>{title}</H>
@@ -458,18 +458,22 @@ function Settings({ api, site, onSite, role }: { api: AdminApi; site: Site; onSi
   return (
     <View style={{ gap: 16 }}>
       <ErrorText error={error} />
-      {section('Freemium switches', (
+      {section('Membership levels', (
         <>
-          <Toggle label="Lock “who liked you”" hint="Free members see a count and blurred faces." value={pw.whoLikedMe} onChange={(v) => save({ settings: { paywall: { whoLikedMe: v } } })} />
-          <Toggle label="Lock “who viewed you”" value={pw.whoViewedMe} onChange={(v) => save({ settings: { paywall: { whoViewedMe: v } } })} />
-          <Toggle label="Premium to start conversations" hint="Free members can always reply." value={pw.initiateContact} onChange={(v) => save({ settings: { paywall: { initiateContact: v } } })} />
+          <Toggle label="Paywall on" hint={site.settings.membership.paywallEnabled ? 'Levels below are live. Free members are limited as shown.' : 'Off: every member gets full access. Set up the levels now and switch on when you are ready.'}
+            value={site.settings.membership.paywallEnabled} onChange={(v) => save({ settings: { membership: { paywallEnabled: v } } })} />
+          <TierMatrix site={site} save={save} />
           <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <View style={{ flex: 1, minWidth: 160 }}><Field label="Price label" value={price} onChangeText={setPrice} /></View>
-            <View style={{ flex: 1, minWidth: 160 }}><Field label="Billing descriptor" value={descriptor} onChangeText={setDescriptor} /></View>
-            <Btn label="Save" size="sm" onPress={() => save({ settings: { premiumPriceLabel: price, billingDescriptor: descriptor } })} />
+            <View style={{ flex: 1, minWidth: 160 }}><Field label="Billing descriptor" value={descriptor} onChangeText={setDescriptor} hint="What members see on their statement" /></View>
+            <Btn label="Save" size="sm" onPress={() => save({ settings: { billingDescriptor: descriptor } })} />
           </View>
         </>
-      ), 'Everything is free at launch. Flip these on when you are ready to charge.')}
+      ), 'Pricing is by level, the same for every member. Defaults follow the WhatBox plan: Free can browse and reply to VIPs, Paid sees everything, VIP likes go first and anyone can answer VIP messages.')}
+      {section('Units', (
+        <Segmented<'imperial' | 'metric'> value={site.settings.units} onChange={(u) => save({ settings: { units: u } })} options={[
+          { value: 'imperial', label: 'Feet and inches' }, { value: 'metric', label: 'Centimeters' },
+        ]} />
+      ), 'Default for new members. Each member can change it, and heights always show both.')}
       {section('Message safety', (
         <>
           <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -500,5 +504,65 @@ function Settings({ api, site, onSite, role }: { api: AdminApi; site: Site; onSi
         <ChipPicker options={['standard', 'sensitive', 'adult']} value={site.settings.mode} onChange={(v: any) => save({ settings: { mode: v } })} />
       ), role === 'platform' ? 'Only WhatBox can change this. Adult sites need an adult-friendly processor such as CCBill.' : 'Set by WhatBox. Ask your WhatBox contact to change it.')}
     </View>
+  );
+}
+
+const PERMS: { key: keyof TierPerms; label: string; kind: 'bool' | 'tiers' }[] = [
+  { key: 'seePublicPhotos', label: 'See public photos (beyond photo one)', kind: 'bool' },
+  { key: 'requestPrivatePhotos', label: 'Request private photos', kind: 'bool' },
+  { key: 'seeWhoViewed', label: 'See who viewed them', kind: 'bool' },
+  { key: 'startConversations', label: 'Start conversations', kind: 'bool' },
+  { key: 'priorityLikes', label: 'Their likes go to the top', kind: 'bool' },
+  { key: 'seeLikesFrom', label: 'See likes from', kind: 'tiers' },
+  { key: 'readMessagesFrom', label: 'Read and answer messages from', kind: 'tiers' },
+];
+
+function TierMatrix({ site, save }: { site: Site; save: (p: Parameters<AdminApi['updateSite']>[1]) => Promise<void> }) {
+  const t = useTheme();
+  const ms = site.settings.membership;
+  const [labels, setLabels] = useState(() => Object.fromEntries(TIERS.map((x) => [x, { label: ms.tiers[x].label, price: ms.tiers[x].priceLabel }])) as Record<Tier, { label: string; price: string }>);
+  const setPerm = (tier: Tier, patch: Partial<TierPerms>) => save({ settings: { membership: { tiers: { [tier]: patch } } } });
+  const short = (x: Tier) => ms.tiers[x].label;
+  return (
+    <ScrollView horizontal contentContainerStyle={{ minWidth: '100%' }}>
+      <View style={{ minWidth: 640, flex: 1, borderWidth: 1, borderColor: t.line, borderRadius: 14, overflow: 'hidden' }}>
+        <View style={{ flexDirection: 'row', backgroundColor: t.accentSoft }}>
+          <View style={{ flex: 1.6, padding: 10 }}><Txt bold size={14}>Permission</Txt></View>
+          {TIERS.map((x) => (
+            <View key={x} style={{ flex: 1, padding: 8, gap: 6 }}>
+              <Field label="Name" value={labels[x].label} onChangeText={(v) => setLabels({ ...labels, [x]: { ...labels[x], label: v } })}
+                onBlur={() => labels[x].label.trim() && setPerm(x, { label: labels[x].label.trim() })} />
+              {x !== 'free' ? (
+                <Field label="Price" value={labels[x].price} onChangeText={(v) => setLabels({ ...labels, [x]: { ...labels[x], price: v } })}
+                  onBlur={() => setPerm(x, { priceLabel: labels[x].price.trim() })} />
+              ) : <Txt sub size={12}>No charge</Txt>}
+            </View>
+          ))}
+        </View>
+        {PERMS.map((p, i) => (
+          <View key={p.key} style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: t.line, backgroundColor: i % 2 ? t.ground : t.surface, alignItems: 'center' }}>
+            <View style={{ flex: 1.6, padding: 10 }}><Txt size={14}>{p.label}</Txt></View>
+            {TIERS.map((x) => {
+              const v = ms.tiers[x][p.key];
+              return (
+                <View key={x} style={{ flex: 1, padding: 8 }}>
+                  {p.kind === 'bool' ? (
+                    <Check label={v ? 'Yes' : 'No'} value={!!v} onChange={(nv) => setPerm(x, { [p.key]: nv } as Partial<TierPerms>)} />
+                  ) : (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                      {TIERS.map((from) => {
+                        const list = v as Tier[];
+                        const on = list.includes(from);
+                        return <Chip key={from} label={short(from)} selected={on} onPress={() => setPerm(x, { [p.key]: on ? list.filter((y) => y !== from) : [...list, from] } as Partial<TierPerms>)} />;
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }

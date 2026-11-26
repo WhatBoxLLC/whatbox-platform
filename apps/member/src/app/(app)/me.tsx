@@ -1,17 +1,19 @@
 import { ApiError, type AccessRow, type Member } from '@whatbox/core';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useSession } from '../../lib/session';
 import { FieldsEditor } from '../../ui/FieldsEditor';
 import { Avatar, Badge, Btn, Card, ErrorText, Field, H, Notice, relTime, Segmented, Toggle, Txt, useTheme } from '../../ui/kit';
+import { TIERS, type TierPerms, type Units } from '@whatbox/core';
 import { PhotoManager } from '../../ui/PhotoManager';
 
 type Tab = 'profile' | 'photos' | 'access' | 'settings';
 
 export default function Me() {
-  const { me } = useSession();
-  const [tab, setTab] = useState<Tab>('profile');
+  const { me, site } = useSession();
+  const params = useLocalSearchParams<{ tab?: string }>();
+  const [tab, setTab] = useState<Tab>(params.tab === 'settings' ? 'settings' : 'profile');
   if (!me) return null;
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
@@ -20,7 +22,7 @@ export default function Me() {
           <Avatar photo={me.photos.find((p) => p.kind === 'main')} size={64} />
           <View style={{ flex: 1 }}>
             <H size={28}>{me.member.displayName}</H>
-            <Txt sub size={14}>{me.member.city}, {me.member.region} · {me.member.premium ? 'Premium' : 'Free member'}</Txt>
+            <Txt sub size={14}>{me.member.city}, {me.member.region} · {site.membership.tiers[me.member.tier ?? 'free'].label} member</Txt>
           </View>
         </View>
         <Segmented<Tab> value={tab} onChange={setTab} options={[
@@ -113,6 +115,41 @@ function AccessTab() {
   );
 }
 
+function MembershipCard() {
+  const { api, me, setMe, site } = useSession();
+  const ms = site.membership;
+  const cur = me!.member.tier ?? 'free';
+  const lines = (tp: TierPerms) => [
+    tp.seePublicPhotos ? 'All public photos' : 'Main photo only',
+    tp.requestPrivatePhotos ? 'Request private photos' : null,
+    tp.seeLikesFrom.length === 3 ? 'See everyone who likes you' : `See likes from ${tp.seeLikesFrom.map((x) => ms.tiers[x].label).join(', ')}`,
+    tp.startConversations ? 'Start conversations' : 'Reply to VIP messages',
+    tp.priorityLikes ? 'Your likes go to the top' : null,
+  ].filter(Boolean) as string[];
+  return (
+    <Card style={{ gap: 12 }}>
+      <H size={18} level={2}>Membership</H>
+      {!ms.paywallEnabled ? <Notice tone="success" icon="star">{`${site.name} is free for everyone right now, with full access. Levels below show what changes when the site turns on paid plans.`}</Notice> : null}
+      <View style={{ gap: 10 }}>
+        {TIERS.map((tid) => {
+          const tp = ms.tiers[tid];
+          const on = cur === tid;
+          return (
+            <View key={tid} style={{ borderWidth: on ? 2 : 1, borderColor: on ? '#22655F' : '#E4DED5', borderRadius: 14, padding: 12, gap: 4 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <Txt bold>{tp.label}{tp.priceLabel ? ` · ${tp.priceLabel}` : ' · free'}</Txt>
+                {on ? <Badge label="Your plan" /> : <Btn size="sm" kind="secondary" label={`Switch (prototype)`} onPress={async () => setMe(await api.setTier(tid))} />}
+              </View>
+              <Txt sub size={13}>{lines(tp).join(' · ')}</Txt>
+            </View>
+          );
+        })}
+      </View>
+      <Txt sub size={12}>{`Same price for every member. Statements show "${site.billingDescriptor}". The prototype takes no payment.`}</Txt>
+    </Card>
+  );
+}
+
 function SettingsTab() {
   const { api, me, setMe, signOut, site } = useSession();
   const m = me!.member;
@@ -122,11 +159,14 @@ function SettingsTab() {
         <H size={18} level={2}>Content</H>
         <Toggle label="Hide explicit photos" hint={site.explicitPhotosAllowed ? 'When on, explicit private photos show as a placeholder.' : `${site.name} does not allow explicit photos, so this has no effect here.`} value={m.hideExplicit} onChange={async (v) => setMe(await api.updateMe({ hideExplicit: v }))} />
       </Card>
-      <Card style={{ gap: 10 }}>
-        <H size={18} level={2}>Membership</H>
-        <Txt sub>{m.premium ? `You're on Premium. Your statement shows "${site.billingDescriptor}".` : `Free member. Premium is ${site.premiumPriceLabel}.`}</Txt>
-        <Btn size="sm" kind={m.premium ? 'secondary' : 'primary'} label={m.premium ? 'Cancel Premium (prototype)' : 'Upgrade (prototype, no charge)'} style={{ alignSelf: 'flex-start' }} onPress={async () => setMe(await api.upgrade(!m.premium))} />
+      <Card style={{ gap: 8 }}>
+        <H size={18} level={2}>Units</H>
+        <Txt sub size={14}>Heights always show both. This picks which comes first.</Txt>
+        <Segmented<Units> value={m.unitsResolved} onChange={async (u) => setMe(await api.updateMe({ units: u }))} options={[
+          { value: 'imperial', label: 'Feet and inches' }, { value: 'metric', label: 'Centimeters' },
+        ]} />
       </Card>
+      <MembershipCard />
       <Card style={{ gap: 10 }}>
         <H size={18} level={2}>Account</H>
         <Txt sub>Signed in with {m.contact || 'a verified contact'}. This is encrypted and never shown to other members.</Txt>

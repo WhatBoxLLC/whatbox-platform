@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useSession } from '../../../lib/session';
-import { Avatar, Card, H, Icon, Loading, relTime, Txt, useTheme } from '../../../ui/kit';
+import { Avatar, Badge, Card, H, Icon, Loading, relTime, Txt, useTheme } from '../../../ui/kit';
 
 export default function Messages() {
   const { api } = useSession();
@@ -31,10 +31,13 @@ export default function Messages() {
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-                    <Txt bold size={17}>{c.other.displayName}, {c.other.age}</Txt>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
+                      <Txt bold size={17}>{c.other.displayName}, {c.other.age}</Txt>
+                      {c.fromVip ? <Badge label="★ VIP" tone="alert" /> : null}
+                    </View>
                     <Txt sub size={13}>{relTime(c.last.at)}</Txt>
                   </View>
-                  <Txt sub={!c.unread} bold={!!c.unread} size={15} numberOfLines={1}>{c.last.fromMe ? 'You: ' : ''}{c.last.body}</Txt>
+                  <Txt sub={!c.unread} bold={!!c.unread} size={15} numberOfLines={1}>{c.last.sealed ? '🔒 ' : c.last.fromMe ? 'You: ' : ''}{c.last.body}</Txt>
                 </View>
                 {c.unread ? <View style={{ backgroundColor: t.alert, borderRadius: 999, minWidth: 22, height: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 }}><Txt bold size={12} color="#FFFFFF">{c.unread}</Txt></View> : null}
               </Pressable>

@@ -63,10 +63,12 @@ export default function Conversation() {
           {c.messages.map((m) => (
             <View key={m.id} style={{ alignSelf: m.fromMe ? 'flex-end' : 'flex-start', maxWidth: '78%', gap: 4 }}>
               <View style={{
-                backgroundColor: m.fromMe ? (m.held ? '#8FA9A5' : t.accent) : t.surface, borderWidth: m.fromMe ? 0 : 1, borderColor: t.line,
+                backgroundColor: m.fromMe ? (m.held ? '#8FA9A5' : t.accent) : m.sealed ? t.ground : t.surface, borderWidth: m.fromMe ? 0 : m.fromVip ? 2 : 1, borderColor: m.fromVip ? '#D9A43A' : t.line,
+                borderStyle: m.sealed ? 'dashed' : 'solid',
                 borderRadius: 18, borderBottomRightRadius: m.fromMe ? 6 : 18, borderBottomLeftRadius: m.fromMe ? 18 : 6, paddingHorizontal: 14, paddingVertical: 10,
               }}>
-                <Txt size={15} color={m.fromMe ? '#FFFFFF' : t.ink}>{m.body}</Txt>
+                {m.fromVip ? <Txt size={11} bold color="#A8740F">★ VIP MEMBER</Txt> : null}
+                <Txt size={15} color={m.fromMe ? '#FFFFFF' : m.sealed ? t.sub : t.ink}>{m.sealed ? '🔒 ' : ''}{m.body}</Txt>
               </View>
               {m.notice ? <Txt size={12} sub style={{ textAlign: m.fromMe ? 'right' : 'left' }}>{m.notice}</Txt> : null}
               <Txt size={11} sub style={{ textAlign: m.fromMe ? 'right' : 'left' }}>{m.fromMe && m.readAt ? `Read ${clockTime(m.readAt)}` : clockTime(m.at)}</Txt>
@@ -85,7 +87,12 @@ export default function Conversation() {
         </ScrollView>
 
         <View style={{ backgroundColor: t.surface, borderTopWidth: 1, borderColor: t.line, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 14, gap: 8 }}>
-          {c.lockReason ? <Notice tone="warn" icon="lock">{c.lockReason}</Notice> : (
+          {c.lockReason ? (
+            <View style={{ gap: 8 }}>
+              <Notice tone="warn" icon="lock">{c.lockReason}</Notice>
+              <Btn size="sm" label="See membership levels" style={{ alignSelf: 'flex-start' }} onPress={() => router.push('/me?tab=settings')} />
+            </View>
+          ) : (
             <>
               <Txt sub size={12}>
                 {c.contactShared.me && c.contactShared.them ? 'You both shared contact info, so numbers and emails now show.' : 'Phone numbers, emails and links are hidden until you both opt in.'}

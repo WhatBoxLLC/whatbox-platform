@@ -3,7 +3,7 @@
 // the one-database-per-site layout of production.
 import type { AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
 import type {
-  AdminUser, Block, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
+  AdminUser, Block, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
   PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
@@ -44,18 +44,19 @@ export class MemoryControlRepo implements ControlRepo {
 
 export interface SiteSnapshot {
   members: Member[]; photos: Photo[]; access: PrivateAccess[]; likes: Like[]; views: View[];
-  blocks: Block[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
+  blocks: Block[]; passes: Pass[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
   moderation: ModerationItem[]; pages: ContentPage[]; challenges: VerificationChallenge[];
   sessions: MemberSession[];
 }
 
 export class MemorySiteRepo implements SiteRepo {
   d: SiteSnapshot = {
-    members: [], photos: [], access: [], likes: [], views: [], blocks: [], messages: [], optins: [],
+    members: [], photos: [], access: [], likes: [], views: [], blocks: [], passes: [], messages: [], optins: [],
     reports: [], moderation: [], pages: [], challenges: [], sessions: [],
   };
   constructor(snap?: Partial<SiteSnapshot>) {
     if (snap) Object.assign(this.d, clone(snap));
+    this.d.passes ??= [];
   }
   snapshot(): SiteSnapshot { return clone(this.d); }
 
@@ -120,7 +121,15 @@ export class MemorySiteRepo implements SiteRepo {
   async listAccessForViewer(v: string) { return clone(this.d.access.filter((a) => a.viewerId === v)); }
 
   async addLike(l: Like) {
-    if (!this.d.likes.some((x) => x.fromId === l.fromId && x.toId === l.toId)) this.d.likes.push(clone(l));
+    const i = this.d.likes.findIndex((x) => x.fromId === l.fromId && x.toId === l.toId);
+    if (i < 0) this.d.likes.push(clone(l));
+    else if (l.vip && !this.d.likes[i].vip) this.d.likes[i] = clone(l);
+  }
+  async addPass(p: Pass) {
+    this.upsert(this.d.passes, p, (x) => x.fromId === p.fromId && x.toId === p.toId);
+  }
+  async listPassesFrom(id: string, since: string) {
+    return clone(this.d.passes.filter((p) => p.fromId === id && p.at >= since));
   }
   async removeLike(f: string, t: string) {
     this.d.likes = this.d.likes.filter((x) => !(x.fromId === f && x.toId === t));
@@ -197,7 +206,7 @@ export class MemorySiteRepo implements SiteRepo {
       members: this.d.members.length,
       activeToday: this.d.members.filter((m) => m.lastActiveAt >= day).length,
       newThisWeek: this.d.members.filter((m) => m.createdAt >= week).length,
-      premium: this.d.members.filter((m) => m.premium).length,
+      paid: this.d.members.filter((m) => m.tier === 'paid' || m.tier === 'vip').length,
       messagesToday: this.d.messages.filter((m) => m.at >= day).length,
     };
   }

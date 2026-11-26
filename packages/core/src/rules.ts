@@ -1,5 +1,5 @@
 // Pure business rules. No I/O, so they are easy to test and identical on server and client.
-import type { MessageFlag, PhotoKind, PhotoRating, Site } from './types';
+import type { MembershipSettings, MessageFlag, PhotoKind, PhotoRating, Site, Tier, TierPerms } from './types';
 
 export const PHOTO_LIMITS: Record<PhotoKind, number> = { main: 1, public: 6, private: 6 };
 export const ONLINE_WINDOW_MS = 15 * 60 * 1000;
@@ -125,7 +125,7 @@ export interface ScreenResult {
   reject?: RuleError;
 }
 
-// Runs for every member, premium or not.
+// Runs for every member, whatever their tier.
 export function screenMessage(input: ScreenInput): ScreenResult {
   const { body, site, now } = input;
   const limits = site.settings.messageLimits;
@@ -202,4 +202,90 @@ export function photoVisibleTo(
   if (args.platform !== 'web') return 'app_safe'; // never in the store apps
   if (args.viewerHidesExplicit) return 'filtered';
   return 'show';
+}
+
+// ---------- Height ----------
+
+export function cmToFeetInches(cm: number): { ft: number; inch: number } {
+  const total = Math.round(cm / 2.54);
+  return { ft: Math.floor(total / 12), inch: total % 12 };
+}
+
+export function feetInchesToCm(ft: number, inch: number): number {
+  return Math.round((ft * 12 + inch) * 2.54);
+}
+
+// Always shows both systems, leading with the viewer's preferred one.
+export function formatHeight(cm: number, units: 'imperial' | 'metric'): string {
+  const { ft, inch } = cmToFeetInches(cm);
+  const imperial = `${ft}′ ${inch}″`;
+  const metric = `${Math.round(cm)} cm`;
+  return units === 'metric' ? `${metric} (${imperial})` : `${imperial} (${metric})`;
+}
+
+// ---------- Discover ranking ----------
+// One blended feed: recent activity, new-member boost and fit all add up, so a new member who
+// is offline still surfaces, and an active long-time member still does too. VIP likes jump the queue.
+
+export interface ScoreInput {
+  viewer: { gender: string; seeking: string[]; ageMin: number; ageMax: number; birthYear: number; lat: number; lng: number };
+  cand: { gender: string; seeking: string[]; ageMin: number; ageMax: number; birthYear: number; lat: number; lng: number; lastActiveAt: string; createdAt: string; about: string };
+  hasPhoto: boolean;
+  vipLikedViewer: boolean;
+  now: Date;
+  newMemberDays: number;
+}
+
+export function scoreCandidate(i: ScoreInput): number {
+  const now = i.now.getTime();
+  const hoursIdle = Math.max(0, (now - Date.parse(i.cand.lastActiveAt)) / 3_600_000);
+  const daysOld = Math.max(0, (now - Date.parse(i.cand.createdAt)) / 86_400_000);
+  const year = i.now.getUTCFullYear();
+  let s = 30 * Math.exp(-hoursIdle / 48); // active recently
+  if (daysOld < i.newMemberDays) s += 25 * (1 - daysOld / i.newMemberDays); // new people get seen
+  if (i.cand.seeking.includes(i.viewer.gender)) s += 15; // they're looking for someone like me
+  const viewerAge = year - i.viewer.birthYear;
+  if (viewerAge >= i.cand.ageMin && viewerAge <= i.cand.ageMax) s += 10; // I'm in their age range
+  const miles = milesBetween(i.viewer, i.cand);
+  s += 10 * Math.max(0, 1 - miles / 100);
+  if (i.hasPhoto) s += 8;
+  if (i.cand.about.length > 60) s += 4;
+  if (i.vipLikedViewer) s += 60;
+  return Math.round(s * 10) / 10;
+}
+
+// ---------- Membership tiers ----------
+
+export const DEFAULT_MEMBERSHIP: MembershipSettings = {
+  paywallEnabled: false, // launch: everyone free with full access while the community grows
+  tiers: {
+    free: {
+      label: 'Free', priceLabel: '', seePublicPhotos: false, requestPrivatePhotos: false,
+      seeLikesFrom: ['vip'], seeWhoViewed: false, startConversations: false, readMessagesFrom: ['vip'], priorityLikes: false,
+    },
+    paid: {
+      label: 'Member', priceLabel: '$14.99/mo', seePublicPhotos: true, requestPrivatePhotos: true,
+      seeLikesFrom: ['free', 'paid', 'vip'], seeWhoViewed: true, startConversations: true, readMessagesFrom: ['free', 'paid', 'vip'], priorityLikes: false,
+    },
+    vip: {
+      label: 'VIP', priceLabel: '$29.99/mo', seePublicPhotos: true, requestPrivatePhotos: true,
+      seeLikesFrom: ['free', 'paid', 'vip'], seeWhoViewed: true, startConversations: true, readMessagesFrom: ['free', 'paid', 'vip'], priorityLikes: true,
+    },
+  },
+};
+
+// What a member can do right now. With the paywall off everyone gets full access,
+// but priority likes still only come from members who are actually on a priority tier.
+export function effectivePerms(ms: MembershipSettings, tier: Tier): TierPerms {
+  const own = ms.tiers[tier];
+  if (ms.paywallEnabled) return own;
+  return {
+    ...own, seePublicPhotos: true, requestPrivatePhotos: true, seeLikesFrom: ['free', 'paid', 'vip'], seeWhoViewed: true,
+    startConversations: true, readMessagesFrom: ['free', 'paid', 'vip'],
+  };
+}
+
+// Cheapest tier that unlocks a permission, for upgrade prompts.
+export function tierFor(ms: MembershipSettings, test: (p: TierPerms) => boolean): Tier | null {
+  return (['paid', 'vip'] as Tier[]).find((t) => test(ms.tiers[t])) ?? null;
 }

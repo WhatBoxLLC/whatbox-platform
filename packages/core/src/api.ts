@@ -4,9 +4,9 @@
 import { RuleError } from './rules';
 import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
-  ActivityList, AdminMemberRow, ClientPlatform, ContentPage, ConversationSummary, ConversationView, MemberProfile,
+  ActivityList, AdminMemberRow, ClientPlatform, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
-  SearchResult, Site, SiteMode, SiteStats,
+  SearchResult, Site, SiteMode, SiteStats, Tier,
 } from './types';
 
 export class ApiError extends Error {
@@ -32,7 +32,7 @@ export interface MemberApi {
   addPhoto(input: { kind: PhotoKind; rating?: PhotoRating; url?: string; tone?: [string, string] }): Promise<MyProfile>;
   updatePhoto(id: string, patch: { kind?: PhotoKind; rating?: PhotoRating }): Promise<MyProfile>;
   deletePhoto(id: string): Promise<MyProfile>;
-  upgrade(on?: boolean): Promise<MyProfile>;
+  setTier(tier: Tier): Promise<MyProfile>; // prototype checkout
 
   privateAccess(): Promise<{ incoming: AccessRow[]; outgoing: AccessRow[] }>;
   requestAccess(ownerId: string): Promise<'requested' | 'granted'>;
@@ -40,7 +40,9 @@ export interface MemberApi {
 
   search(filters: SearchFilters): Promise<SearchResult>;
   profile(id: string): Promise<MemberProfile>;
-  like(id: string, on: boolean): Promise<{ liked: boolean; mutual: boolean }>;
+  like(id: string, on: boolean): Promise<{ liked: boolean; mutual: boolean; vip: boolean }>;
+  pass(id: string): Promise<{ ok: boolean }>;
+  discover(): Promise<DiscoverCard[]>;
   block(id: string, on: boolean): Promise<{ blocked: boolean }>;
   report(id: string, reason: string): Promise<{ ok: boolean }>;
   activity(kind: 'likes' | 'views' | 'mine'): Promise<ActivityList>;
@@ -66,6 +68,7 @@ export interface AdminApi {
   decide(siteId: string, itemId: string, decision: 'approve' | 'reject'): Promise<ModerationView[]>;
   members(siteId: string, opts: { search?: string; page?: number }): Promise<{ total: number; page: number; rows: AdminMemberRow[] }>;
   setMemberStatus(siteId: string, memberId: string, status: MemberStatus): Promise<{ ok: boolean }>;
+  setMemberTier(siteId: string, memberId: string, tier: Tier): Promise<{ ok: boolean }>;
   pages(siteId: string): Promise<ContentPage[]>;
   savePage(siteId: string, page: ContentPage): Promise<ContentPage[]>;
   deletePage(siteId: string, slug: string): Promise<ContentPage[]>;
@@ -98,13 +101,15 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     addPhoto: (i) => wrap(async () => platform.addPhoto(await ctx(), i)),
     updatePhoto: (id, p) => wrap(async () => platform.updatePhoto(await ctx(), id, p)),
     deletePhoto: (id) => wrap(async () => platform.deletePhoto(await ctx(), id)),
-    upgrade: (on) => wrap(async () => platform.upgrade(await ctx(), on)),
+    setTier: (tier) => wrap(async () => platform.setTier(await ctx(), tier)),
     privateAccess: () => wrap(async () => platform.accessLists(await ctx())),
     requestAccess: (id) => wrap(async () => platform.requestAccess(await ctx(), id)),
     decideAccess: (id, a) => wrap(async () => platform.decideAccess(await ctx(), id, a)),
     search: (f) => wrap(async () => platform.search(await ctx(), f)),
     profile: (id) => wrap(async () => platform.profile(await ctx(), id)),
     like: (id, on) => wrap(async () => platform.like(await ctx(), id, on)),
+    pass: (id) => wrap(async () => platform.pass(await ctx(), id)),
+    discover: () => wrap(async () => platform.discover(await ctx())),
     block: (id, on) => wrap(async () => platform.block(await ctx(), id, on)),
     report: (id, r) => wrap(async () => platform.report(await ctx(), id, r)),
     activity: (k) => wrap(async () => platform.activity(await ctx(), k)),
@@ -136,6 +141,7 @@ export function createLocalAdminApi(platform: Platform): AdminApi {
     decide: (s, i, d) => wrap(async () => platform.adminDecide(await admin(), s, i, d)),
     members: (s, o) => wrap(async () => platform.adminMembers(await admin(), s, o)),
     setMemberStatus: (s, m, st) => wrap(async () => platform.adminSetMemberStatus(await admin(), s, m, st)),
+    setMemberTier: (s, m, t) => wrap(async () => platform.adminSetMemberTier(await admin(), s, m, t)),
     pages: (s) => wrap(async () => platform.adminPages(await admin(), s)),
     savePage: (s, p) => wrap(async () => platform.adminSavePage(await admin(), s, p)),
     deletePage: (s, slug) => wrap(async () => platform.adminDeletePage(await admin(), s, slug)),

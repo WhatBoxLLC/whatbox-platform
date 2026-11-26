@@ -23,8 +23,19 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   assert.equal(await api.requestAccess(rosa.id), 'requested');
 
   const likes = await api.activity('likes');
-  assert.equal(likes.locked, true);
+  assert.equal(likes.locked, false); // paywall is off at launch
   assert.equal(likes.total, 12);
+  assert.ok(likes.vipCount > 0 && likes.people[0].vip);
+
+  const deck = await api.discover();
+  assert.ok(deck.length > 3);
+  await api.pass(deck[0].id);
+  assert.ok(!(await api.discover()).some((c) => c.id === deck[0].id));
+  assert.equal((await api.like(deck[1].id, true)).vip, false);
+  assert.equal((await api.setTier('vip')).member.tier, 'vip');
+  assert.equal((await api.like(deck[2].id, true)).vip, true);
+  await api.setTier('free');
+  assert.match(prof.details.find((d) => d.key === 'height')!.value, /cm/);
 
   const conv = await api.send(rosa.id, 'Text me at 303-555-0142');
   assert.ok(conv.messages.at(-1)!.notice?.includes('hidden'));
@@ -46,6 +57,11 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   assert.equal(adm.sites.length, 3);
   const queue = await admin.moderation('site_afterh', 'pending');
   assert.ok(queue.some((q) => q.kind === 'message' && q.messageBody?.includes('gift card')));
+  const site2 = await admin.updateSite('site_afterh', { settings: { membership: { paywallEnabled: true } } });
+  assert.equal(site2.settings.membership.paywallEnabled, true);
+  const locked = await api.activity('likes');
+  assert.ok(locked.locked && locked.people.every((p) => p.vip));
+  await admin.updateSite('site_afterh', { settings: { membership: { paywallEnabled: false } } });
   const stats = await admin.stats('site_afterh');
   assert.ok(stats.members > 40);
   console.log('smoke ok:', { members: stats.members, openModeration: stats.openModeration, searchTotal: res.total });

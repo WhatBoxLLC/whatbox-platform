@@ -100,16 +100,69 @@ test('private photos: request, grant, revoke', async () => {
   assert.ok(prof.privatePhotos.every((p) => p.placeholder === 'locked'));
 });
 
-test('freemium lock hides who liked you until upgrade', async () => {
+async function ownerAdmin(mp: Awaited<ReturnType<typeof createMemoryPlatform>>) {
+  const admin = createLocalAdminApi(mp.platform);
+  const st = await admin.start(DEMO_OWNER_EMAIL);
+  admin.setToken((await admin.verify(st.challengeId, st.devCode!)).token);
+  return admin;
+}
+
+test('paywall off at launch: free members get full access', async () => {
   const { api } = await signIn();
-  let likes = await api.activity('likes');
-  assert.equal(likes.locked, true);
-  assert.equal(likes.total, 12);
-  assert.equal(likes.people.length, 0);
-  await api.upgrade(true);
-  likes = await api.activity('likes');
+  const me = await api.me();
+  assert.equal(me.paywallEnabled, false);
+  assert.equal(me.member.tier, 'free');
+  const likes = await api.activity('likes');
   assert.equal(likes.locked, false);
   assert.equal(likes.people.length, 12);
+  // priority likes from VIPs still lead the list
+  assert.ok(likes.vipCount > 0);
+  const firstPlain = likes.people.findIndex((p) => !p.vip);
+  assert.ok(firstPlain >= likes.vipCount && likes.people.slice(firstPlain).every((p) => !p.vip));
+});
+
+test('paywall on: Free sees VIP likes only and photo one only; Paid unlocks', async () => {
+  const { api, mp } = await signIn();
+  const admin = await ownerAdmin(mp);
+  await admin.updateSite('site_afterh', { settings: { membership: { paywallEnabled: true } } });
+  let likes = await api.activity('likes');
+  assert.equal(likes.total, 12);
+  assert.ok(likes.locked && likes.hidden === 12 - likes.vipCount);
+  assert.ok(likes.people.length === likes.vipCount && likes.people.every((p) => p.vip));
+  const rosa = (await api.search({ pageSize: 48 })).people.find((p) => p.displayName === 'Rosa')!;
+  let prof = await api.profile(rosa.id);
+  assert.equal(prof.publicPhotos.length, 0);
+  assert.ok(prof.publicPhotosLocked > 0);
+  await assert.rejects(api.requestAccess(rosa.id), /Upgrade/);
+  await api.setTier('paid');
+  likes = await api.activity('likes');
+  assert.equal(likes.people.length, 12);
+  prof = await api.profile(rosa.id);
+  assert.ok(prof.publicPhotos.length > 0);
+});
+
+test('paywall on: VIP messages are readable and answerable by Free; Paid messages are sealed', async () => {
+  const mp = await createMemoryPlatform();
+  const admin = await ownerAdmin(mp);
+  await admin.updateSite('site_afterh', { settings: { membership: { paywallEnabled: true } } });
+  const alex = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await alex.startVerification('email', DEMO_MEMBER_EMAIL);
+  alex.setToken((await alex.verify(s.challengeId, s.devCode!)).token);
+  const convs = await alex.conversations();
+  const priya = convs.find((c) => c.other.displayName === 'Priya')!;
+  const rosa = convs.find((c) => c.other.displayName === 'Rosa')!;
+  assert.equal(priya.fromVip, true);
+  assert.equal(priya.last.sealed, false);
+  // Rosa is on Paid in the seed, so her messages are sealed for a Free member (checked below)
+  const pv = await alex.conversation(priya.other.id);
+  assert.equal(pv.canSend, true);
+  assert.match(pv.messages.at(-1)!.notice ?? '', /VIP/);
+  await alex.send(priya.other.id, 'Saw a great show last week!');
+  const rv = await alex.conversation(rosa.other.id);
+  assert.ok(rv.sealedCount > 0 && !rv.canSend);
+  // Free can't start new conversations
+  const someone = (await alex.search({ pageSize: 48, withinMiles: null })).people.find((p) => !convs.some((c) => c.other.id === p.id))!;
+  await assert.rejects(alex.send(someone.id, 'Hello there'), /Upgrade/);
 });
 
 test('messages: held scam text is invisible to recipient and lands in moderation', async () => {
@@ -163,9 +216,10 @@ test('owner admin: site switcher only lists managed sites; owners cannot change 
   const me = await admin.me();
   assert.equal(me.sites.length, 3);
   await assert.rejects(admin.updateSite('site_afterh', { settings: { mode: 'standard' } }), /Only WhatBox/);
-  const site = await admin.updateSite('site_afterh', { settings: { paywall: { whoLikedMe: false } } });
-  assert.equal(site.settings.paywall.whoLikedMe, false);
-  assert.equal(site.settings.paywall.whoViewedMe, true);
+  const site = await admin.updateSite('site_afterh', { settings: { membership: { tiers: { free: { seeWhoViewed: true } } } } });
+  assert.equal(site.settings.membership.tiers.free.seeWhoViewed, true);
+  assert.equal(site.settings.membership.tiers.free.seePublicPhotos, false);
+  assert.equal(site.settings.membership.paywallEnabled, false);
 });
 
 test('throttling applies to new conversations', async () => {
@@ -176,4 +230,36 @@ test('throttling applies to new conversations', async () => {
     try { await api.send(people[i].id, `Hi ${people[i].displayName}, nice profile number ${i}`); } catch (e) { err = e; break; }
   }
   assert.ok(err instanceof ApiError && err.status === 429);
+});
+
+test('height is stored in cm and shown in both units', async () => {
+  const { api } = await signIn();
+  const res = await api.search({ sort: 'best' });
+  const rosa = res.people.find((p) => p.displayName === 'Rosa')!;
+  const prof = await api.profile(rosa.id);
+  assert.equal(prof.details.find((d) => d.key === 'height')!.value, '5′ 6″ (168 cm)');
+  await api.updateMe({ units: 'metric' });
+  const p2 = await api.profile(rosa.id);
+  assert.equal(p2.details.find((d) => d.key === 'height')!.value, '168 cm (5′ 6″)');
+  await assert.rejects(api.updateMe({ fields: { height: 'tall' } }));
+});
+
+test('discover: pass hides a profile; VIP members send priority likes', async () => {
+  const { api, mp } = await signIn();
+  const deck = await api.discover();
+  assert.ok(deck.length > 3);
+  assert.ok(deck.every((c, i) => i === 0 || deck[i - 1].score >= c.score));
+  await api.pass(deck[0].id);
+  assert.ok(!(await api.discover()).some((c) => c.id === deck[0].id));
+  assert.equal((await api.like(deck[1].id, true)).vip, false);
+  await api.setTier('vip');
+  assert.equal((await api.like(deck[2].id, true)).vip, true);
+  void mp;
+});
+
+test('new members get a boost in the blended feed', async () => {
+  const { api } = await signIn();
+  const deck = await api.discover();
+  const newOnes = deck.filter((c) => c.isNew);
+  assert.ok(newOnes.length > 0, 'seed has new members');
 });

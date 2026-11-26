@@ -3,7 +3,7 @@ import {
   ArgumentsHost, Body, Catch, Controller, Delete, ExceptionFilter, Get, Global, Headers, HttpException, Inject, Module,
   Param, Patch, Post, Put, Query, Req,
 } from '@nestjs/common';
-import { type ClientPlatform, type ContentPage, type Platform, type ProfileFieldDef, RuleError, type SearchFilters } from '@whatbox/core';
+import { type ClientPlatform, type ContentPage, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
 import type { Request, Response } from 'express';
 
 export const PLATFORM = 'PLATFORM';
@@ -74,7 +74,7 @@ export class MeController extends SiteScoped {
     return this.p.updatePhoto(await this.ctx(r), id, { kind: b.kind, rating: b.rating });
   }
   @Delete('photos/:id') async delPhoto(@Req() r: Request, @Param('id') id: string) { return this.p.deletePhoto(await this.ctx(r), id); }
-  @Post('upgrade') async upgrade(@Req() r: Request, @Body() b: { on?: boolean }) { return this.p.upgrade(await this.ctx(r), b.on !== false); }
+  @Post('tier') async tier(@Req() r: Request, @Body() b: { tier: Tier }) { return this.p.setTier(await this.ctx(r), b.tier); }
   @Get('private-access') async access(@Req() r: Request) { return this.p.accessLists(await this.ctx(r)); }
   @Post('private-access/:viewerId') async decide(@Req() r: Request, @Param('viewerId') v: string, @Body() b: { action: 'grant' | 'deny' | 'revoke' }) {
     return this.p.decideAccess(await this.ctx(r), v, b.action);
@@ -90,6 +90,7 @@ export class MembersController extends SiteScoped {
   }
   @Get(':id') async profile(@Req() r: Request, @Param('id') id: string) { return this.p.profile(await this.ctx(r), id); }
   @Post(':id/like') async like(@Req() r: Request, @Param('id') id: string) { return this.p.like(await this.ctx(r), id, true); }
+  @Post(':id/pass') async pass(@Req() r: Request, @Param('id') id: string) { return this.p.pass(await this.ctx(r), id); }
   @Delete(':id/like') async unlike(@Req() r: Request, @Param('id') id: string) { return this.p.like(await this.ctx(r), id, false); }
   @Post(':id/block') async block(@Req() r: Request, @Param('id') id: string) { return this.p.block(await this.ctx(r), id, true); }
   @Delete(':id/block') async unblock(@Req() r: Request, @Param('id') id: string) { return this.p.block(await this.ctx(r), id, false); }
@@ -102,6 +103,7 @@ export class MembersController extends SiteScoped {
 @Controller('v1')
 export class SocialController extends SiteScoped {
   constructor(@Inject(PLATFORM) p: Platform) { super(p); }
+  @Get('discover') async discover(@Req() r: Request) { return this.p.discover(await this.ctx(r)); }
   @Get('activity/:kind') async activity(@Req() r: Request, @Param('kind') kind: 'likes' | 'views' | 'mine') {
     if (!['likes', 'views', 'mine'].includes(kind)) throw new RuleError('bad_kind', 'Unknown list.', 404);
     return this.p.activity(await this.ctx(r), kind);
@@ -147,6 +149,9 @@ export class AdminController {
   }
   @Patch('sites/:site/members/:id') async memberStatus(@Headers('authorization') a: string, @Param('site') s: string, @Param('id') id: string, @Body() b: { status: 'active' | 'suspended' }) {
     return this.p.adminSetMemberStatus(await this.admin(a), s, id, b.status);
+  }
+  @Patch('sites/:site/members/:id/tier') async memberTier(@Headers('authorization') a: string, @Param('site') s: string, @Param('id') id: string, @Body() b: { tier: Tier }) {
+    return this.p.adminSetMemberTier(await this.admin(a), s, id, b.tier);
   }
   @Get('sites/:site/pages') async pages(@Headers('authorization') a: string, @Param('site') s: string) { return this.p.adminPages(await this.admin(a), s); }
   @Put('sites/:site/pages/:slug') async savePage(@Headers('authorization') a: string, @Param('site') s: string, @Body() b: ContentPage) {

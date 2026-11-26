@@ -16,7 +16,7 @@ export default function Landing() {
   const [pages, setPages] = useState<ContentPage[]>([]);
   useEffect(() => { api.pages().then(setPages).catch(() => {}); }, [api]);
 
-  if (signedIn && me) return <Redirect href={me.member.profileComplete ? '/browse' : '/onboarding'} />;
+  if (signedIn && me) return <Redirect href={me.member.profileComplete ? '/discover' : '/onboarding'} />;
   const sensitive = site.mode === 'sensitive';
   const guides = pages.filter((p) => p.placement === 'guides');
   const footer = pages.filter((p) => p.placement === 'footer');

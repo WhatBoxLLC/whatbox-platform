@@ -21,10 +21,25 @@ export interface SiteTheme {
   fontsHref?: string; // Google Fonts stylesheet for the web
 }
 
-export interface PaywallFlags {
-  whoLikedMe: boolean; // non-premium sees a count, not faces
-  whoViewedMe: boolean;
-  initiateContact: boolean; // non-premium can reply but not start a conversation
+// Membership tiers. Each site owner edits what each tier can do. Pricing is by tier, never by gender.
+export type Tier = 'free' | 'paid' | 'vip';
+export const TIERS: Tier[] = ['free', 'paid', 'vip'];
+
+export interface TierPerms {
+  label: string;
+  priceLabel: string; // '' for free
+  seePublicPhotos: boolean; // the gallery beyond photo one
+  requestPrivatePhotos: boolean;
+  seeLikesFrom: Tier[]; // whose likes show up in "Liked you" (others are a count)
+  seeWhoViewed: boolean;
+  startConversations: boolean;
+  readMessagesFrom: Tier[]; // a message from a sender outside this list stays sealed until upgrade
+  priorityLikes: boolean; // likes go to the top of the recipient's list
+}
+
+export interface MembershipSettings {
+  paywallEnabled: boolean; // off: everyone gets full access, as at launch
+  tiers: Record<Tier, TierPerms>;
 }
 
 export interface SiteSettings {
@@ -32,8 +47,7 @@ export interface SiteSettings {
   publicTeasers: boolean; // public, crawlable member teasers (never on sensitive sites)
   explicitPhotosAllowed: boolean; // private photos may be marked explicit (web only)
   photoModeration: 'pre' | 'post'; // pre: hidden until approved; post: visible, reviewed after
-  paywall: PaywallFlags;
-  premiumPriceLabel: string;
+  membership: MembershipSettings;
   billingDescriptor: string;
   messageLimits: {
     newConversationsPerHour: number;
@@ -41,9 +55,16 @@ export interface SiteSettings {
     duplicateRecipientThreshold: number; // same text to this many people in 24h is held
   };
   paymentProvider: 'none' | 'paypal' | 'stripe' | 'ccbill';
+  units: Units; // default for members; each member can override
+  discover: {
+    newMemberDays: number; // how long a new member gets a visibility boost
+    passCooldownDays: number; // a passed profile can reappear after this
+  };
 }
 
-export type FieldType = 'select' | 'multiselect' | 'text' | 'number' | 'boolean';
+export type Units = 'imperial' | 'metric';
+
+export type FieldType = 'select' | 'multiselect' | 'text' | 'number' | 'boolean' | 'height'; // height is stored in cm
 
 export interface ProfileFieldDef {
   key: string;
@@ -108,8 +129,9 @@ export interface Member {
   about: string;
   fields: Record<string, string | string[] | number | boolean>;
   status: MemberStatus;
-  premium: boolean;
+  tier: Tier;
   hideExplicit: boolean; // member's own filter for explicit content
+  units?: Units; // overrides the site default
   createdAt: string;
   lastActiveAt: string;
 }
@@ -138,7 +160,8 @@ export interface PrivateAccess {
   updatedAt: string;
 }
 
-export interface Like { fromId: string; toId: string; at: string }
+export interface Like { fromId: string; toId: string; at: string; vip?: boolean } // vip: sent with priority
+export interface Pass { fromId: string; toId: string; at: string }
 export interface View { viewerId: string; viewedId: string; at: string }
 export interface Block { blockerId: string; blockedId: string; at: string }
 
@@ -150,6 +173,7 @@ export interface Message {
   body: string; // stored as written
   flags: MessageFlag[];
   held: boolean; // held for moderation, not delivered
+  senderTier?: Tier; // the sender's tier when sent; decides who can read it
   at: string;
   readAt?: string;
 }
@@ -227,6 +251,16 @@ export interface MemberCard {
   mainPhoto?: PhotoView;
   headline: string;
   likedByMe: boolean;
+  isNew: boolean; // joined recently
+}
+
+export interface DiscoverCard extends MemberCard {
+  summary: string; // first lines of "about me"
+  facts: string[]; // e.g. "5′ 6″ (168 cm)", "Long-term"
+  interests: string[];
+  publicPhotos: PhotoView[]; // up to 3 more photos to tap through
+  vipLikedMe: boolean; // priority likes are visible on every tier
+  score: number;
 }
 
 export interface MemberProfile extends MemberCard {
@@ -242,6 +276,10 @@ export interface MemberProfile extends MemberCard {
   privatePhotos: PhotoView[];
   privatePhotoCount: number;
   privateAccess: AccessStatus | 'none';
+  publicPhotosLocked: number; // gallery photos hidden by my tier
+  canRequestPrivate: boolean;
+  upgradeHint?: string;
+  tier: Tier; // their tier, shown as a VIP badge
   verified: boolean;
   blockedByMe: boolean;
   canMessage: boolean;
@@ -249,15 +287,18 @@ export interface MemberProfile extends MemberCard {
 }
 
 export interface MyProfile {
-  member: Omit<Member, 'emailHash' | 'emailEnc' | 'phoneHash' | 'phoneEnc'> & { contact: string };
+  member: Omit<Member, 'emailHash' | 'emailEnc' | 'phoneHash' | 'phoneEnc'> & { contact: string; unitsResolved: Units };
+  perms: TierPerms; // what I can do right now (full access while the paywall is off)
+  paywallEnabled: boolean;
   photos: PhotoView[];
   limits: { main: number; public: number; private: number };
 }
 
 export interface ConversationSummary {
   other: MemberCard;
-  last: { body: string; at: string; fromMe: boolean };
+  last: { body: string; at: string; fromMe: boolean; sealed: boolean };
   unread: number;
+  fromVip: boolean; // they're VIP, so I can always read and reply
 }
 
 export interface MessageView {
@@ -267,6 +308,8 @@ export interface MessageView {
   at: string;
   readAt?: string;
   held: boolean; // only the sender sees held messages, with a note
+  sealed: boolean; // my tier can't read it yet
+  fromVip: boolean;
   notice?: string;
 }
 
@@ -276,14 +319,26 @@ export interface ConversationView {
   contactShared: { me: boolean; them: boolean };
   canSend: boolean;
   lockReason?: string;
+  otherTier: Tier;
+  sealedCount: number;
+}
+
+export interface ActivityPerson extends MemberCard {
+  at: string;
+  vip: boolean; // sent a priority (VIP) like
+  fitsMe: boolean; // matches my age range, who I'm looking for and distance
+  serious: boolean; // verified, has a main photo, wrote a real "about me"
+  likedBack: boolean;
 }
 
 export interface ActivityList {
   kind: 'likes' | 'views' | 'mine';
   total: number;
-  locked: boolean;
-  people: (MemberCard & { at: string })[]; // empty when locked
-  priceLabel: string;
+  vipCount: number;
+  hidden: number; // people my tier can't see yet (shown as a count)
+  locked: boolean; // hidden > 0
+  people: ActivityPerson[];
+  upgradeLabel: string;
 }
 
 export interface PublicSite {
@@ -295,11 +350,11 @@ export interface PublicSite {
   theme: SiteTheme;
   mode: SiteMode;
   fields: ProfileFieldDef[];
-  paywall: PaywallFlags;
-  premiumPriceLabel: string;
+  membership: MembershipSettings;
   billingDescriptor: string;
   explicitPhotosAllowed: boolean;
   publicTeasers: boolean;
+  units: Units;
 }
 
 export interface SearchFilters {
@@ -310,7 +365,7 @@ export interface SearchFilters {
   withPhoto?: boolean;
   onlineNow?: boolean;
   fields?: Record<string, string[]>; // field key -> any of these values
-  sort?: 'recent' | 'newest' | 'closest';
+  sort?: 'best' | 'recent' | 'newest' | 'closest';
   page?: number;
   pageSize?: number;
 }
@@ -326,7 +381,7 @@ export interface SiteStats {
   members: number;
   activeToday: number;
   newThisWeek: number;
-  premium: number;
+  paid: number; // members on Paid or VIP
   messagesToday: number;
   openModeration: number;
 }
@@ -337,7 +392,7 @@ export interface AdminMemberRow {
   age: number;
   city: string;
   status: MemberStatus;
-  premium: boolean;
+  tier: Tier;
   createdAt: string;
   lastActiveAt: string;
   photoCount: number;

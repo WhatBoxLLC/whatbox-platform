@@ -5,11 +5,11 @@ import { lookupPostal } from './geo';
 import type { ControlRepo, Clock, Notifier, SiteRepo } from './repo';
 import { systemClock } from './repo';
 import {
-  ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, maskContactInfo, milesBetween,
-  ONLINE_WINDOW_MS, PHOTO_LIMITS, photoVisibleTo, RuleError, screenMessage,
+  ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
+  ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
 } from './rules';
 import type {
-  AccessStatus, ActivityList, AdminMemberRow, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
+  AccessStatus, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
   SiteSettings, SiteStats, SiteTheme,
@@ -43,6 +43,7 @@ export interface ProfilePatch {
   about?: string;
   fields?: Member['fields'];
   hideExplicit?: boolean;
+  units?: Units;
 }
 
 export interface AccessRow { member: MemberCard; status: AccessStatus; updatedAt: string }
@@ -100,10 +101,11 @@ export class Platform {
     return {
       id: site.id, slug: site.slug, name: site.name, tagline: site.tagline, audience: site.audience,
       theme: site.theme, mode: site.settings.mode, fields: [...site.fields].sort((a, b) => a.order - b.order),
-      paywall: site.settings.paywall, premiumPriceLabel: site.settings.premiumPriceLabel,
+      membership: site.settings.membership,
       billingDescriptor: site.settings.billingDescriptor,
       explicitPhotosAllowed: site.settings.explicitPhotosAllowed,
       publicTeasers: site.settings.mode !== 'sensitive' && site.settings.publicTeasers,
+      units: site.settings.units,
     };
   }
 
@@ -165,7 +167,7 @@ export class Platform {
         id: randomId('m_'), displayName: '', verifiedAt: now, profileComplete: false,
         birthYear: this.now().getUTCFullYear() - 30, gender: 'woman', seeking: ['man'], ageMin: 25, ageMax: 50,
         city: '', region: '', postal: '', lat: 0, lng: 0, about: '', fields: {}, status: 'active',
-        premium: false, hideExplicit: true, createdAt: now, lastActiveAt: now,
+        tier: 'free', hideExplicit: true, createdAt: now, lastActiveAt: now,
       };
       if (c.channel === 'email') { member.emailHash = c.targetHash; member.emailEnc = c.targetEnc; }
       else { member.phoneHash = c.targetHash; member.phoneEnc = c.targetEnc; }
@@ -243,6 +245,7 @@ export class Platform {
         mainPhoto: main ? this.photoView(ctx, main, { owner: false }) : undefined,
         headline: this.headline(ctx.site, m),
         likedByMe: liked.has(m.id),
+        isNew: now.getTime() - Date.parse(m.createdAt) < ctx.site.settings.discover.newMemberDays * 86_400_000,
       };
     });
   }
@@ -270,7 +273,11 @@ export class Platform {
     const contactRaw = emailEnc ? await crypto.decrypt(emailEnc) : phoneEnc ? await crypto.decrypt(phoneEnc) : '';
     const photos = await ctx.repo.listPhotos(ctx.me.id);
     return {
-      member: { ...rest, contact: contactRaw ? maskTarget(emailEnc ? 'email' : 'phone', contactRaw) : '' },
+      member: {
+        ...rest, contact: contactRaw ? maskTarget(emailEnc ? 'email' : 'phone', contactRaw) : '',
+        unitsResolved: this.units(ctx),
+      },
+      perms: this.perms(ctx), paywallEnabled: ctx.site.settings.membership.paywallEnabled,
       photos: photos.map((p) => this.photoView(ctx, p, { owner: true })),
       limits: PHOTO_LIMITS,
     };
@@ -317,6 +324,7 @@ export class Platform {
       }
     }
     if (patch.hideExplicit !== undefined) m.hideExplicit = patch.hideExplicit;
+    if (patch.units === 'imperial' || patch.units === 'metric') m.units = patch.units;
 
     if (!m.profileComplete) {
       const missing = ctx.site.fields.filter((f) => f.required && (m.fields[f.key] === undefined || m.fields[f.key] === ''));
@@ -395,6 +403,7 @@ export class Platform {
   async requestAccess(ctx: MemberCtx, ownerId: string) {
     this.requireComplete(ctx);
     await this.other(ctx, ownerId);
+    if (!this.perms(ctx).requestPrivatePhotos) throw this.upgradeError(ctx, (p) => p.requestPrivatePhotos, 'request private photos');
     const existing = await ctx.repo.getAccess(ownerId, ctx.me.id);
     if (existing?.status === 'granted') return 'granted' as const;
     if (existing?.status === 'denied' || existing?.status === 'revoked') {
@@ -469,8 +478,12 @@ export class Platform {
     let cards = await this.cards(ctx, rows);
     if (f.withPhoto) cards = cards.filter((c) => c.mainPhoto);
     const byId = new Map(rows.map((m) => [m.id, m]));
-    const sort = f.sort ?? 'recent';
+
+    const sort = f.sort ?? 'best';
+    const vipFrom = new Set((await ctx.repo.listLikesTo(ctx.me.id)).filter((l) => l.vip).map((l) => l.fromId));
+    const score = new Map(cards.map((c) => [c.id, this.score(ctx, byId.get(c.id)!, !!c.mainPhoto, vipFrom.has(c.id))]));
     cards.sort((a, b) => {
+      if (sort === 'best') return score.get(b.id)! - score.get(a.id)!;
       if (sort === 'closest') return (a.miles ?? 1e9) - (b.miles ?? 1e9);
       const ma = byId.get(a.id)!, mb = byId.get(b.id)!;
       if (sort === 'newest') return mb.createdAt.localeCompare(ma.createdAt);
@@ -496,16 +509,24 @@ export class Platform {
       const v = m.fields[def.key];
       if (v === undefined || v === '' || def.showOnProfile === false) continue;
       if (def.section === 'interests' && Array.isArray(v)) { interests = interests.concat(v); continue; }
-      details.push({ key: def.key, label: def.label, value: Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v) });
+      details.push({ key: def.key, label: def.label, value: this.fieldText(ctx, def, v) });
     }
     const lock = await this.messageLock(ctx, m.id);
     const privatePhotos = photos.filter((p) => p.kind === 'private');
+    const perms = this.perms(ctx);
+    const gallery = photos.filter((p) => p.kind === 'public');
+    const ms = ctx.site.settings.membership;
+    const hintTier = !perms.seePublicPhotos ? tierFor(ms, (p) => p.seePublicPhotos) : !perms.requestPrivatePhotos ? tierFor(ms, (p) => p.requestPrivatePhotos) : null;
     this.changed();
     return {
       ...card,
       about: m.about, gender: m.gender, seeking: m.seeking, ageMin: m.ageMin, ageMax: m.ageMax, lastActiveAt: m.lastActiveAt,
       details, interests,
-      publicPhotos: photos.filter((p) => p.kind === 'public').map((p) => this.photoView(ctx, p, { owner: false })),
+      publicPhotos: perms.seePublicPhotos ? gallery.map((p) => this.photoView(ctx, p, { owner: false })) : [],
+      publicPhotosLocked: perms.seePublicPhotos ? 0 : gallery.length,
+      canRequestPrivate: perms.requestPrivatePhotos,
+      upgradeHint: hintTier ? `Upgrade to ${ms.tiers[hintTier].label} to see all of ${m.displayName}'s photos and request private ones.` : undefined,
+      tier: this.tierOf(m),
       privatePhotos: privatePhotos.map((p) => this.photoView(ctx, p, { owner: false, unlocked })),
       privatePhotoCount: privatePhotos.length,
       privateAccess: access?.status ?? 'none',
@@ -521,11 +542,106 @@ export class Platform {
   async like(ctx: MemberCtx, id: string, on: boolean) {
     this.requireComplete(ctx);
     await this.other(ctx, id);
-    if (on) await ctx.repo.addLike({ fromId: ctx.me.id, toId: id, at: this.iso() });
+    // Priority comes from the sender's tier (VIP by default), not from a per-like purchase.
+    const vip = on && this.isPriority(ctx);
+    if (on) await ctx.repo.addLike({ fromId: ctx.me.id, toId: id, at: this.iso(), vip: vip || undefined });
     else await ctx.repo.removeLike(ctx.me.id, id);
     this.changed();
     const mutual = on && (await ctx.repo.listLikesFrom(id)).some((l) => l.toId === ctx.me.id);
-    return { liked: on, mutual };
+    return { liked: on, mutual, vip };
+  }
+
+  async pass(ctx: MemberCtx, id: string) {
+    this.requireComplete(ctx);
+    await ctx.repo.addPass({ fromId: ctx.me.id, toId: id, at: this.iso() });
+    this.changed();
+    return { ok: true };
+  }
+
+  private tierOf(m: Member): Tier {
+    return m.tier ?? ((m as { premium?: boolean }).premium ? 'paid' : 'free');
+  }
+
+  private perms(ctx: MemberCtx): TierPerms {
+    return effectivePerms(ctx.site.settings.membership, this.tierOf(ctx.me));
+  }
+
+  private isPriority(ctx: MemberCtx) {
+    return ctx.site.settings.membership.tiers[this.tierOf(ctx.me)].priorityLikes;
+  }
+
+  private upgradeError(ctx: MemberCtx, test: (p: TierPerms) => boolean, what: string) {
+    const t = tierFor(ctx.site.settings.membership, test);
+    return new RuleError('upgrade_required', t ? `Upgrade to ${ctx.site.settings.membership.tiers[t].label} to ${what}.` : `Your membership can't ${what}.`, 402);
+  }
+
+  private canRead(ctx: MemberCtx, msg: Message) {
+    return msg.fromId === ctx.me.id || this.perms(ctx).readMessagesFrom.includes(msg.senderTier ?? 'free');
+  }
+
+  private units(ctx: MemberCtx): Units {
+    return ctx.me.units ?? ctx.site.settings.units;
+  }
+
+  private fieldText(ctx: MemberCtx, def: ProfileFieldDef, v: Member['fields'][string]): string {
+    if (def.type === 'height' && typeof v === 'number') return formatHeight(v, this.units(ctx));
+    return Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v);
+  }
+
+  private score(ctx: MemberCtx, m: Member, hasPhoto: boolean, vipLikedMe: boolean) {
+    return scoreCandidate({
+      viewer: ctx.me, cand: m, hasPhoto, vipLikedViewer: vipLikedMe, now: this.now(),
+      newMemberDays: ctx.site.settings.discover.newMemberDays,
+    });
+  }
+
+  // Quick review stack: photo one plus a short summary, best candidates first.
+  async discover(ctx: MemberCtx, limit = 20): Promise<DiscoverCard[]> {
+    this.requireComplete(ctx);
+    const now = this.now();
+    const year = now.getUTCFullYear();
+    const since = new Date(now.getTime() - ctx.site.settings.discover.passCooldownDays * 86_400_000).toISOString();
+    const skip = new Set<string>([
+      ctx.me.id,
+      ...(await this.blockedIds(ctx)),
+      ...(await ctx.repo.listLikesFrom(ctx.me.id)).map((l) => l.toId),
+      ...(await ctx.repo.listPassesFrom(ctx.me.id, since)).map((p) => p.toId),
+    ]);
+    const within = 100;
+    const dLat = within / 69;
+    const dLng = within / (69 * Math.max(0.2, Math.cos((ctx.me.lat * Math.PI) / 180)));
+    const rows = await ctx.repo.queryMembers({
+      excludeIds: [...skip], genders: ctx.me.seeking, birthYearMin: year - ctx.me.ageMax, birthYearMax: year - ctx.me.ageMin,
+      bbox: ctx.me.lat || ctx.me.lng ? { minLat: ctx.me.lat - dLat, maxLat: ctx.me.lat + dLat, minLng: ctx.me.lng - dLng, maxLng: ctx.me.lng + dLng } : undefined,
+      onlyComplete: true,
+    });
+    const vipFrom = new Set((await ctx.repo.listLikesTo(ctx.me.id)).filter((l) => l.vip).map((l) => l.fromId));
+    const cards = await this.cards(ctx, rows);
+    const photos = await ctx.repo.listPhotosFor(rows.map((r) => r.id));
+    const byId = new Map(rows.map((m) => [m.id, m]));
+    const seeGallery = this.perms(ctx).seePublicPhotos;
+    const out: DiscoverCard[] = cards.map((c) => {
+      const m = byId.get(c.id)!;
+      const facts: string[] = [];
+      let interests: string[] = [];
+      for (const def of [...ctx.site.fields].sort((a, b) => a.order - b.order)) {
+        const v = m.fields[def.key];
+        if (v === undefined || v === '' || def.showOnProfile === false) continue;
+        if (def.section === 'interests' && Array.isArray(v)) interests = v.slice(0, 4);
+        else if (facts.length < 3 && !def.sensitive) facts.push(this.fieldText(ctx, def, v));
+      }
+      return {
+        ...c,
+        summary: m.about.length > 180 ? m.about.slice(0, 177) + '…' : m.about,
+        facts, interests,
+        publicPhotos: !seeGallery ? [] : photos.filter((p) => p.memberId === m.id && p.kind === 'public' && this.visibleToOthers(ctx.site, p)).slice(0, 3)
+          .map((p) => this.photoView(ctx, p, { owner: false })),
+        vipLikedMe: vipFrom.has(m.id),
+        score: this.score(ctx, m, !!c.mainPhoto, vipFrom.has(m.id)),
+      };
+    });
+    out.sort((a, b) => b.score - a.score);
+    return out.slice(0, limit);
   }
 
   async block(ctx: MemberCtx, id: string, on: boolean) {
@@ -558,26 +674,49 @@ export class Platform {
   async activity(ctx: MemberCtx, kind: 'likes' | 'views' | 'mine'): Promise<ActivityList> {
     this.requireComplete(ctx);
     const blocked = await this.blockedIds(ctx);
-    let entries: { id: string; at: string }[];
-    if (kind === 'likes') entries = (await ctx.repo.listLikesTo(ctx.me.id)).map((l) => ({ id: l.fromId, at: l.at }));
-    else if (kind === 'views') entries = (await ctx.repo.listViewsOf(ctx.me.id)).map((v) => ({ id: v.viewerId, at: v.at }));
-    else entries = (await ctx.repo.listLikesFrom(ctx.me.id)).map((l) => ({ id: l.toId, at: l.at }));
+    let entries: { id: string; at: string; vip: boolean }[];
+    if (kind === 'likes') entries = (await ctx.repo.listLikesTo(ctx.me.id)).map((l) => ({ id: l.fromId, at: l.at, vip: !!l.vip }));
+    else if (kind === 'views') entries = (await ctx.repo.listViewsOf(ctx.me.id)).map((v) => ({ id: v.viewerId, at: v.at, vip: false }));
+    else entries = (await ctx.repo.listLikesFrom(ctx.me.id)).map((l) => ({ id: l.toId, at: l.at, vip: !!l.vip }));
     const members = (await ctx.repo.getMembers(entries.map((e) => e.id))).filter((m) => m.status === 'active' && !blocked.has(m.id));
-    const valid = new Set(members.map((m) => m.id));
-    entries = entries.filter((e) => valid.has(e.id)).sort((a, b) => b.at.localeCompare(a.at));
-    const pw = ctx.site.settings.paywall;
-    const locked = !ctx.me.premium && ((kind === 'likes' && pw.whoLikedMe) || (kind === 'views' && pw.whoViewedMe));
-    let people: ActivityList['people'] = [];
-    if (!locked) {
-      const cards = new Map((await this.cards(ctx, members)).map((c) => [c.id, c]));
-      people = entries.map((e) => ({ ...cards.get(e.id)!, at: e.at }));
-    }
-    return { kind, total: entries.length, locked, people, priceLabel: ctx.site.settings.premiumPriceLabel };
+    const byId = new Map(members.map((m) => [m.id, m]));
+    entries = entries.filter((e) => byId.has(e.id));
+    const perms = this.perms(ctx);
+    // A priority like counts as coming from a VIP, so the default Free tier still sees it.
+    const canSee = (e: { id: string; vip: boolean }) =>
+      kind === 'mine' || (kind === 'views' ? perms.seeWhoViewed : perms.seeLikesFrom.includes(e.vip ? 'vip' : this.tierOf(byId.get(e.id)!)));
+    const visible = entries.filter(canSee);
+    const hidden = entries.length - visible.length;
+    const ms = ctx.site.settings.membership;
+    const up = tierFor(ms, (p) => (kind === 'views' ? p.seeWhoViewed : p.seeLikesFrom.length === 3));
+    const cards = new Map((await this.cards(ctx, visible.map((e) => byId.get(e.id)!))).map((c) => [c.id, c]));
+    const myLikes = new Set((await ctx.repo.listLikesFrom(ctx.me.id)).map((l) => l.toId));
+    const year = this.now().getUTCFullYear();
+    const people: ActivityPerson[] = visible.map((e) => {
+      const m = byId.get(e.id)!;
+      const c = cards.get(e.id)!;
+      const age = year - m.birthYear;
+      return {
+        ...c, at: e.at, vip: e.vip,
+        fitsMe: ctx.me.seeking.includes(m.gender) && age >= ctx.me.ageMin && age <= ctx.me.ageMax && (c.miles === null || c.miles <= 100),
+        serious: !!m.verifiedAt && !!c.mainPhoto && m.about.length >= 60,
+        likedBack: myLikes.has(e.id),
+      };
+    });
+    // Busy inboxes: VIP first, then people who fit what I asked for, then serious profiles, newest first within each.
+    const rank = (p: ActivityPerson) => (p.vip ? 4 : 0) + (p.fitsMe ? 2 : 0) + (p.serious ? 1 : 0);
+    people.sort((a, b) => (kind === 'mine' ? 0 : rank(b) - rank(a)) || b.at.localeCompare(a.at));
+    return {
+      kind, total: entries.length, vipCount: entries.filter((e) => e.vip).length, hidden, locked: hidden > 0, people,
+      upgradeLabel: up ? `${ms.tiers[up].label}${ms.tiers[up].priceLabel ? ' · ' + ms.tiers[up].priceLabel : ''}` : '',
+    };
   }
 
-  // Stub checkout. Real build hands off to the site's payment provider and flips premium on webhook.
-  async upgrade(ctx: MemberCtx, on = true) {
-    ctx.me.premium = on;
+  // Stub checkout. The real build hands off to the site's payment provider and sets the tier on its webhook.
+  async setTier(ctx: MemberCtx, tier: Tier) {
+    if (!['free', 'paid', 'vip'].includes(tier)) throw new RuleError('bad_tier', 'Unknown membership level.');
+    ctx.me.tier = tier;
+    delete (ctx.me as { premium?: boolean }).premium;
     await ctx.repo.saveMember(ctx.me);
     this.changed();
     return this.myProfile(ctx);
@@ -590,9 +729,17 @@ export class Platform {
     if (blocks.some((b) => (b.blockerId === ctx.me.id && b.blockedId === otherId) || (b.blockerId === otherId && b.blockedId === ctx.me.id))) {
       return 'You cannot message this member.';
     }
-    if (ctx.site.settings.paywall.initiateContact && !ctx.me.premium) {
+    if (!this.perms(ctx).startConversations) {
+      // Free members can reply to anyone whose messages they can read (VIPs by default).
       const thread = await ctx.repo.listMessagesBetween(ctx.me.id, otherId);
-      if (!thread.some((m) => m.fromId === otherId && !m.held)) return 'Upgrade to start conversations. You can always reply for free.';
+      const incoming = thread.filter((m) => m.fromId === otherId && !m.held);
+      if (!incoming.some((m) => this.canRead(ctx, m))) {
+        const t = tierFor(ctx.site.settings.membership, (p) => p.startConversations);
+        const label = t ? ctx.site.settings.membership.tiers[t].label : 'a paid membership';
+        return incoming.length
+          ? `Upgrade to ${label} to read and answer this message.`
+          : `Upgrade to ${label} to start conversations. When a VIP member writes to you, you can always reply free.`;
+      }
     }
     return undefined;
   }
@@ -616,10 +763,12 @@ export class Platform {
       const list = byOther.get(c.id)!;
       const last = list[list.length - 1];
       const shared = await this.contactShared(ctx, c.id);
+      const sealed = !this.canRead(ctx, last);
       out.push({
         other: c,
-        last: { body: this.renderBody(last.body, shared.me && shared.them), at: last.at, fromMe: last.fromId === ctx.me.id },
+        last: { body: sealed ? this.sealedText(ctx) : this.renderBody(last.body, shared.me && shared.them), at: last.at, fromMe: last.fromId === ctx.me.id, sealed },
         unread: list.filter((m) => m.toId === ctx.me.id && !m.readAt).length,
+        fromVip: this.tierOf(members.find((m) => m.id === c.id)!) === 'vip',
       });
     }
     return out.sort((a, b) => b.last.at.localeCompare(a.last.at));
@@ -628,6 +777,11 @@ export class Platform {
   async unreadCount(ctx: MemberCtx) {
     if (!ctx.me.profileComplete) return 0;
     return (await this.conversations(ctx)).reduce((n, c) => n + c.unread, 0);
+  }
+
+  private sealedText(ctx: MemberCtx) {
+    const t = tierFor(ctx.site.settings.membership, (p) => p.readMessagesFrom.length === 3);
+    return `New message. Upgrade to ${t ? ctx.site.settings.membership.tiers[t].label : 'read it'} to read it.`;
   }
 
   private renderBody(body: string, bothShared: boolean) {
@@ -642,8 +796,12 @@ export class Platform {
   async conversation(ctx: MemberCtx, otherId: string): Promise<ConversationView> {
     this.requireComplete(ctx);
     const other = await this.other(ctx, otherId);
-    await ctx.repo.markRead(ctx.me.id, otherId, this.iso());
-    const msgs = await ctx.repo.listMessagesBetween(ctx.me.id, otherId);
+    let msgs = await ctx.repo.listMessagesBetween(ctx.me.id, otherId);
+    // Sealed messages stay unread, so the sender never sees a read receipt for a message that wasn't read.
+    if (!msgs.some((m) => m.fromId === otherId && !this.canRead(ctx, m))) {
+      await ctx.repo.markRead(ctx.me.id, otherId, this.iso());
+      msgs = await ctx.repo.listMessagesBetween(ctx.me.id, otherId);
+    }
     const shared = await this.contactShared(ctx, otherId);
     const both = shared.me && shared.them;
     const lock = await this.messageLock(ctx, otherId);
@@ -654,17 +812,22 @@ export class Platform {
         .filter((m) => !m.held || m.fromId === ctx.me.id)
         .map((m) => {
           const mine = m.fromId === ctx.me.id;
+          const sealed = !this.canRead(ctx, m);
+          const fromVip = !mine && m.senderTier === 'vip';
           let notice: string | undefined;
           if (m.held) notice = 'Delivery is paused while our safety team takes a look.';
           else if (mine && !both && m.flags.includes('contact_info')) notice = `Contact details are hidden from ${other.displayName} until you both choose to share.`;
+          else if (fromVip && !this.perms(ctx).startConversations) notice = `${other.displayName} is a VIP member, so you can read and reply free.`;
           return {
-            id: m.id, fromMe: mine, at: m.at, readAt: m.readAt, held: m.held, notice,
-            body: mine ? m.body : this.renderBody(m.body, both),
+            id: m.id, fromMe: mine, at: m.at, readAt: m.readAt, held: m.held, notice, sealed, fromVip,
+            body: mine ? m.body : sealed ? this.sealedText(ctx) : this.renderBody(m.body, both),
           };
         }),
       contactShared: shared,
       canSend: !lock,
       lockReason: lock,
+      otherTier: this.tierOf(other),
+      sealedCount: msgs.filter((m) => m.fromId === otherId && !m.held && !this.canRead(ctx, m)).length,
     };
   }
 
@@ -685,6 +848,7 @@ export class Platform {
     if (screen.reject) throw screen.reject;
     const msg = {
       id: randomId('msg_'), fromId: ctx.me.id, toId: other.id, body, flags: screen.flags, held: screen.hold, at: this.iso(),
+      senderTier: this.tierOf(ctx.me),
     };
     await ctx.repo.saveMessage(msg);
     if (screen.hold) {
@@ -807,7 +971,7 @@ export class Platform {
     for (const m of rows) {
       out.push({
         id: m.id, displayName: m.displayName || '(unfinished signup)', age: ageFromBirthYear(m.birthYear, this.now()),
-        city: m.city, status: m.status, premium: m.premium, createdAt: m.createdAt, lastActiveAt: m.lastActiveAt,
+        city: m.city, status: m.status, tier: this.tierOf(m), createdAt: m.createdAt, lastActiveAt: m.lastActiveAt,
         photoCount: photos.filter((p) => p.memberId === m.id).length, reports: await repo.countReports(m.id),
       });
     }
@@ -824,21 +988,35 @@ export class Platform {
     return { ok: true };
   }
 
+  // Comp a member onto a tier (support, testing, or a promo).
+  async adminSetMemberTier(admin: AdminUser, siteId: string, memberId: string, tier: Tier) {
+    const site = await this.adminSite(admin, siteId);
+    if (!['free', 'paid', 'vip'].includes(tier)) throw new RuleError('bad_tier', 'Unknown membership level.');
+    const repo = await this.repo(site);
+    const m = await repo.getMember(memberId);
+    if (!m) throw new RuleError('not_found', 'Member not found.', 404);
+    const next = { ...m, tier };
+    delete (next as { premium?: boolean }).premium;
+    await repo.saveMember(next);
+    this.changed();
+    return { ok: true };
+  }
+
   async adminUpdateSite(
     admin: AdminUser,
     siteId: string,
-    patch: { name?: string; tagline?: string; theme?: Partial<SiteTheme>; settings?: Partial<Omit<SiteSettings, 'paywall'>> & { paywall?: Partial<SiteSettings['paywall']> } },
+    patch: { name?: string; tagline?: string; theme?: Partial<SiteTheme>; settings?: Partial<Omit<SiteSettings, 'membership'>> & { membership?: MembershipPatch } },
   ): Promise<Site> {
     const site = await this.adminSite(admin, siteId);
     if (patch.name) site.name = patch.name;
     if (patch.tagline) site.tagline = patch.tagline;
     if (patch.theme) site.theme = { ...site.theme, ...patch.theme };
     if (patch.settings) {
-      const { paywall, mode, ...rest } = patch.settings;
+      const { membership, mode, ...rest } = patch.settings;
       if (mode && mode !== site.settings.mode && admin.role !== 'platform') {
         throw new RuleError('forbidden', 'Only WhatBox can change a site mode.', 403);
       }
-      site.settings = { ...site.settings, ...rest, ...(mode ? { mode } : {}), paywall: { ...site.settings.paywall, ...(paywall ?? {}) } };
+      site.settings = { ...site.settings, ...rest, ...(mode ? { mode } : {}), membership: mergeMembership(site.settings.membership, membership) };
       if (site.settings.mode === 'sensitive') site.settings.publicTeasers = false;
       if (site.settings.mode !== 'adult' && rest.explicitPhotosAllowed && admin.role !== 'platform') {
         throw new RuleError('forbidden', 'Explicit photos need an adult site, set by WhatBox.', 403);
@@ -894,6 +1072,26 @@ export class Platform {
   }
 }
 
+export interface MembershipPatch {
+  paywallEnabled?: boolean;
+  tiers?: Partial<Record<Tier, Partial<TierPerms>>>;
+}
+
+function mergeMembership(cur: MembershipSettings, patch?: MembershipPatch): MembershipSettings {
+  if (!patch) return cur;
+  const tiers = { ...cur.tiers };
+  for (const t of ['free', 'paid', 'vip'] as Tier[]) {
+    const p = patch.tiers?.[t];
+    if (!p) continue;
+    const next = { ...tiers[t], ...p };
+    for (const k of ['seeLikesFrom', 'readMessagesFrom'] as const) {
+      next[k] = next[k].filter((x) => x === 'free' || x === 'paid' || x === 'vip');
+    }
+    tiers[t] = next;
+  }
+  return { paywallEnabled: patch.paywallEnabled ?? cur.paywallEnabled, tiers };
+}
+
 function byUpdated(a: { updatedAt: string } | null, b: { updatedAt: string } | null) {
   return (b?.updatedAt ?? '').localeCompare(a?.updatedAt ?? '');
 }
@@ -906,5 +1104,6 @@ function validateField(def: ProfileFieldDef, value: unknown) {
     case 'number': if (typeof value !== 'number' || !Number.isFinite(value)) bad(); break;
     case 'boolean': if (typeof value !== 'boolean') bad(); break;
     case 'text': if (typeof value !== 'string' || value.length > 200) bad(); break;
+    case 'height': if (typeof value !== 'number' || value < 90 || value > 250) bad(); break;
   }
 }

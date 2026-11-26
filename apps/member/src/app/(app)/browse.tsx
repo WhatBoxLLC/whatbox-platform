@@ -14,7 +14,7 @@ const DIST: { label: string; value: number | null }[] = [
   { label: '10 mi', value: 10 }, { label: '25 mi', value: 25 }, { label: '50 mi', value: 50 }, { label: '100 mi', value: 100 }, { label: 'Anywhere', value: null },
 ];
 const SORTS: { label: string; value: NonNullable<SearchFilters['sort']> }[] = [
-  { label: 'Recently active', value: 'recent' }, { label: 'Newest', value: 'newest' }, { label: 'Closest', value: 'closest' },
+  { label: 'Best match', value: 'best' }, { label: 'Recently active', value: 'recent' }, { label: 'Newest', value: 'newest' }, { label: 'Closest', value: 'closest' },
 ];
 
 export default function Browse() {
@@ -22,7 +22,7 @@ export default function Browse() {
   const t = useTheme();
   const wide = useWide(980);
   const [filters, setFilters] = useState<SearchFilters>(() => ({
-    seeking: me!.member.seeking, ageMin: me!.member.ageMin, ageMax: me!.member.ageMax, withinMiles: 50, withPhoto: true, sort: 'recent', page: 1, pageSize: 12, fields: {},
+    seeking: me!.member.seeking, ageMin: me!.member.ageMin, ageMax: me!.member.ageMax, withinMiles: 50, withPhoto: true, sort: 'best', page: 1, pageSize: 12, fields: {},
   }));
   const [draft, setDraft] = useState(filters);
   const [res, setRes] = useState<SearchResult | null>(null);
@@ -112,7 +112,10 @@ function PersonCard({ p, width, onLiked }: { p: MemberCard; width: any; onLiked:
     <View style={{ width, backgroundColor: t.surface, borderWidth: 1, borderColor: t.line, borderRadius: 18, overflow: 'hidden' }}>
       <Pressable accessibilityLabel={`View ${p.displayName}'s profile`} onPress={() => router.push(`/member/${p.id}`)}>
         <PhotoTile photo={p.mainPhoto} radius={0} style={{ height: 230 }} silhouette="72%">
-          {p.online ? <View style={{ position: 'absolute', top: 12, left: 12 }}><Badge label="Online" tone="online" /></View> : null}
+          <View style={{ position: 'absolute', top: 12, left: 12, flexDirection: 'row', gap: 6 }}>
+            {p.online ? <Badge label="Online" tone="online" /> : null}
+            {p.isNew ? <Badge label="New" /> : null}
+          </View>
           <View style={{ position: 'absolute', top: 12, right: 12 }}><Badge label={`${p.photoCount} photo${p.photoCount === 1 ? '' : 's'}`} tone="dark" /></View>
         </PhotoTile>
       </Pressable>

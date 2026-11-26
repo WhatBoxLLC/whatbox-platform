@@ -29,7 +29,7 @@ export default function Verify() {
     try {
       const r = await api.verify(challenge!, value);
       const me = await signIn(r.token);
-      router.replace(me?.member.profileComplete ? '/browse' : '/onboarding');
+      router.replace(me?.member.profileComplete ? '/discover' : '/onboarding');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Something went wrong.');
       setCode('');

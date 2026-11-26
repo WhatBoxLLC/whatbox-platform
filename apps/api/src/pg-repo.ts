@@ -1,7 +1,7 @@
 // PostgreSQL implementations of the core repositories.
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
-  AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Like, Member, MemberQuery, MemberSession,
+  AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Like, Pass, Member, MemberQuery, MemberSession,
   Message, ModerationItem, Photo, PrivateAccess, Report, ReviewStatus, Site, SiteRepo, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
@@ -64,7 +64,7 @@ export class PgSiteRepo implements SiteRepo {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (id) DO UPDATE SET status=$2,profile_complete=$3,display_name=$4,gender=$5,birth_year=$6,lat=$7,lng=$8,city=$9,
          premium=$10,email_hash=$11,phone_hash=$12,last_active_at=$14,doc=$15`,
-      [m.id, m.status, m.profileComplete, m.displayName, m.gender, m.birthYear, m.lat, m.lng, m.city, m.premium,
+      [m.id, m.status, m.profileComplete, m.displayName, m.gender, m.birthYear, m.lat, m.lng, m.city, m.tier === 'paid' || m.tier === 'vip',
         m.emailHash ?? null, m.phoneHash ?? null, m.createdAt, m.lastActiveAt, m],
     );
   }
@@ -123,7 +123,21 @@ export class PgSiteRepo implements SiteRepo {
   async listAccessForViewer(v: string) { return (await this.db.query('SELECT * FROM private_access WHERE viewer_id=$1', [v])).rows.map(this.access); }
 
   // ---- likes, views, blocks
-  async addLike(l: Like) { await this.db.query('INSERT INTO likes VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [l.fromId, l.toId, l.at]); }
+  async addLike(l: Like) {
+    await this.db.query(
+      `INSERT INTO likes (from_id,to_id,at,vip) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (from_id,to_id) DO UPDATE SET vip = likes.vip OR EXCLUDED.vip,
+         at = CASE WHEN EXCLUDED.vip AND NOT likes.vip THEN EXCLUDED.at ELSE likes.at END`,
+      [l.fromId, l.toId, l.at, !!l.vip],
+    );
+  }
+  async addPass(p: Pass) {
+    await this.db.query('INSERT INTO passes (from_id,to_id,at) VALUES ($1,$2,$3) ON CONFLICT (from_id,to_id) DO UPDATE SET at=EXCLUDED.at', [p.fromId, p.toId, p.at]);
+  }
+  async listPassesFrom(id: string, since: string) {
+    return (await this.db.query('SELECT * FROM passes WHERE from_id=$1 AND at >= $2::timestamptz', [id, since])).rows
+      .map((r: any): Pass => ({ fromId: r.from_id, toId: r.to_id, at: iso(r.at) }));
+  }
   async removeLike(f: string, t: string) { await this.db.query('DELETE FROM likes WHERE from_id=$1 AND to_id=$2', [f, t]); }
   async listLikesTo(id: string) { return (await this.db.query('SELECT * FROM likes WHERE to_id=$1', [id])).rows.map(like); }
   async listLikesFrom(id: string) { return (await this.db.query('SELECT * FROM likes WHERE from_id=$1', [id])).rows.map(like); }
@@ -215,14 +229,14 @@ export class PgSiteRepo implements SiteRepo {
          (SELECT count(*) FROM members) AS members,
          (SELECT count(*) FROM members WHERE last_active_at >= $1::timestamptz - interval '1 day') AS active_today,
          (SELECT count(*) FROM members WHERE created_at >= $1::timestamptz - interval '7 days') AS new_week,
-         (SELECT count(*) FROM members WHERE premium) AS premium,
+         (SELECT count(*) FROM members WHERE premium) AS paid,
          (SELECT count(*) FROM messages WHERE at >= $1::timestamptz - interval '1 day') AS messages_today`, [nowIso])).rows[0];
     return {
       members: Number(r.members), activeToday: Number(r.active_today), newThisWeek: Number(r.new_week),
-      premium: Number(r.premium), messagesToday: Number(r.messages_today),
+      paid: Number(r.paid), messagesToday: Number(r.messages_today),
     };
   }
 }
 
 function iso(v: Date | string) { return new Date(v).toISOString(); }
-function like(r: any): Like { return { fromId: r.from_id, toId: r.to_id, at: iso(r.at) }; }
+function like(r: any): Like { return { fromId: r.from_id, toId: r.to_id, at: iso(r.at), ...(r.vip ? { vip: true } : {}) }; }

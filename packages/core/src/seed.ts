@@ -1,8 +1,9 @@
 // Placeholder seed data. No real member data is used anywhere in the prototype.
 import { lookupPostal } from './geo';
+import { DEFAULT_MEMBERSHIP } from './rules';
 import type {
   AdminUser, ContentPage, Gender, Member, Message, ModerationItem, Photo, PrivateAccess, ProfileFieldDef, Site,
-  SiteSettings, View, Like,
+  SiteSettings, Tier, View, Like,
 } from './types';
 
 export const DEMO_MEMBER_EMAIL = 'alex@example.com';
@@ -19,17 +20,21 @@ const FONTS = 'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz
 function settings(over: Partial<SiteSettings>): SiteSettings {
   return {
     mode: 'standard', publicTeasers: false, explicitPhotosAllowed: false, photoModeration: 'post',
-    paywall: { whoLikedMe: false, whoViewedMe: false, initiateContact: false },
-    premiumPriceLabel: '$9.99/mo', billingDescriptor: 'WBX MEMBERSHIP',
+    membership: JSON.parse(JSON.stringify(DEFAULT_MEMBERSHIP)),
+    billingDescriptor: 'WBX MEMBERSHIP',
     messageLimits: { newConversationsPerHour: 10, messagesPerMinute: 8, duplicateRecipientThreshold: 3 },
     paymentProvider: 'paypal',
+    units: 'imperial',
+    discover: { newMemberDays: 14, passCooldownDays: 30 },
     ...over,
   };
 }
 
+const tierRoll = (x: number): Tier => (x < 0.1 ? 'vip' : x < 0.25 ? 'paid' : 'free');
+
 const commonFields = (start: number): ProfileFieldDef[] => [
   { key: 'relationship_goal', label: 'Relationship goal', type: 'select', options: ['Long-term', 'Dating', 'Friendship', 'Not sure yet'], filterable: true, showOnProfile: true, section: 'details', order: start },
-  { key: 'height', label: 'Height', type: 'select', options: ['Under 5′', '5′ 0″–5′ 3″', '5′ 4″–5′ 7″', '5′ 8″–5′ 11″', '6′ 0″–6′ 3″', 'Over 6′ 3″'], showOnProfile: true, section: 'details', order: start + 1 },
+  { key: 'height', label: 'Height', type: 'height', showOnProfile: true, section: 'details', order: start + 1 },
   { key: 'kids', label: 'Kids', type: 'select', options: ['None', 'None, open to it', 'Have kids', 'Have kids, want more', 'Prefer not to say'], filterable: true, showOnProfile: true, section: 'details', order: start + 2 },
   { key: 'smoking', label: 'Smoking', type: 'select', options: ['Never', 'Sometimes', 'Regularly'], filterable: true, showOnProfile: true, section: 'details', order: start + 3 },
   { key: 'drinking', label: 'Drinking', type: 'select', options: ['Never', 'Socially', 'Regularly'], showOnProfile: true, section: 'details', order: start + 4 },
@@ -50,7 +55,6 @@ export function seedSites(now: Date): Site[] {
       },
       settings: settings({
         mode: 'sensitive', publicTeasers: false,
-        paywall: { whoLikedMe: true, whoViewedMe: true, initiateContact: false },
         billingDescriptor: 'WBX MEMBERSHIP',
       }),
       fields: [
@@ -170,6 +174,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     const fields: Member['fields'] = {};
     for (const f of fieldDefs) {
       if (f.type === 'select' && f.options) fields[f.key] = f.key === 'hsv_status' ? pick(r, ['HSV-1', 'HSV-2', 'HSV-2', 'Both', 'Prefer not to say']) : pick(r, f.options);
+      if (f.type === 'height') fields[f.key] = (gender === 'man' ? 170 : 155) + ((i * 37) % 23);
       if (f.type === 'multiselect' && f.options) fields[f.key] = some(r, f.options.filter((o) => o !== 'Prefer not to say'), f.key === 'interests' ? 3 + Math.floor(r() * 3) : 1);
     }
     const online = r() < 0.3;
@@ -178,14 +183,15 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
       birthYear: year - age, gender, seeking, ageMin: Math.max(18, age - 8), ageMax: age + 8,
       city: loc.city, region: loc.region, postal, lat: loc.lat + (r() - 0.5) * 0.02, lng: loc.lng + (r() - 0.5) * 0.02,
       about: `${LINES[lineIdx]} ${pick(r, MORE)} ${pick(r, MORE)}`,
-      fields, status: 'active', premium: r() < 0.15, hideExplicit: true,
+      fields, status: 'active', tier: tierRoll(r()), hideExplicit: true,
       createdAt: t(60 * 24 * (3 + Math.floor(r() * 300))),
       lastActiveAt: online ? t(Math.floor(r() * 10)) : t(30 + Math.floor(r() * 60 * 24 * 6)),
     };
+    if (i % 7 === 5) { m.createdAt = t(60 * 24 * (1 + (i % 9))); m.verifiedAt = m.createdAt; } // a few new members
     if (name === 'Rosa' && big) {
       m.about = "Weekend hiker, weekday baker. I was diagnosed a few years ago and it took a while to feel like myself again. Now I'm ready to meet someone kind, curious and up for a sunrise trail now and then.";
-      m.fields = { ...m.fields, hsv_status: 'HSV-2', relationship_goal: 'Long-term', height: '5′ 4″–5′ 7″', kids: 'None, open to it', smoking: 'Never', drinking: 'Socially', interests: ['Hiking', 'Baking', 'Dogs', 'Podcasts', 'Camping'] };
-      m.ageMin = 34; m.ageMax = 45; m.lastActiveAt = t(3);
+      m.fields = { ...m.fields, hsv_status: 'HSV-2', relationship_goal: 'Long-term', height: 168, kids: 'None, open to it', smoking: 'Never', drinking: 'Socially', interests: ['Hiking', 'Baking', 'Dogs', 'Podcasts', 'Camping'] };
+      m.ageMin = 34; m.ageMax = 45; m.lastActiveAt = t(3); m.tier = 'paid';
     }
     members.push(m);
     const tone = TONES[i % TONES.length];
@@ -208,7 +214,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     birthYear: year - 38, gender: 'man', seeking: ['woman'], ageMin: 30, ageMax: 45,
     city: demoLoc.city, region: demoLoc.region, postal: '80202', lat: demoLoc.lat, lng: demoLoc.lng,
     about: 'Denver transplant, weekend cyclist, and the friend who always brings snacks. Looking for something steady and fun.',
-    fields: {}, status: 'active', premium: false, hideExplicit: true,
+    fields: {}, status: 'active', tier: 'free', hideExplicit: true,
     createdAt: t(60 * 24 * 10), lastActiveAt: t(1),
     ...(opts.demoMemberHash ?? {}),
   };
@@ -216,6 +222,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     if (f.key === 'hsv_status') demo.fields[f.key] = 'HSV-1';
     else if (f.key === 'interests') demo.fields[f.key] = ['Hiking', 'Cooking', 'Live music', 'Dogs'];
     else if (f.key === 'relationship_goal') demo.fields[f.key] = 'Long-term';
+    else if (f.type === 'height') demo.fields[f.key] = 180;
     else if (f.type === 'select' && f.options) demo.fields[f.key] = f.options[0];
     else if (f.type === 'multiselect' && f.options) demo.fields[f.key] = [f.options[0]];
   }
@@ -228,7 +235,10 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
   const byName = (n: string) => members.find((m) => m.displayName === n)!;
 
   // 12 likes and 31 views of Alex on AfterH, matching the mockup
-  const likes: Like[] = some(r, women, Math.min(big ? 12 : 5, women.length)).map((m, i) => ({ fromId: m.id, toId: demo.id, at: t(40 + i * 170) }));
+  const likes: Like[] = some(r, women, Math.min(big ? 12 : 5, women.length)).map((m, i) => {
+    if (i % 5 === 2) m.tier = 'vip';
+    return { fromId: m.id, toId: demo.id, at: t(40 + i * 170), vip: m.tier === 'vip' || undefined };
+  });
   const viewers = some(r, members.filter((m) => m.id !== demo.id), Math.min(big ? 31 : 9, members.length - 1));
   const views: View[] = viewers.map((m, i) => ({ viewerId: m.id, viewedId: demo.id, at: t(15 + i * 95) }));
   likes.push({ fromId: demo.id, toId: women[2].id, at: t(600) });
@@ -269,6 +279,9 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     moderation.push({ id: 'mod_seed_photo', kind: 'photo', refId: 'ph_seed_pending', memberId: tess.id, summary: 'New public photo, marked safe', reasons: ['new upload'], status: 'pending', createdAt: t(12) });
   }
 
+  // Priya is VIP in the demo: with the paywall on, her messages stay readable for free members.
+  if (big) byName('Priya').tier = 'vip';
+  for (const msg of messages) msg.senderTier = members.find((m) => m.id === msg.fromId)?.tier ?? 'free';
   return { members, photos, likes, views, messages, access, moderation, pages: seedPages(site, now) };
 }
 

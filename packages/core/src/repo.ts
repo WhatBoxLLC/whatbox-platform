@@ -1,7 +1,7 @@
 // Storage interfaces. The API implements these on PostgreSQL (one database per site plus
 // a control database); the clickable preview implements them in memory.
 import type {
-  AdminUser, Block, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
+  AdminUser, Block, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
   Photo, PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
@@ -54,10 +54,12 @@ export interface SiteRepo {
   listAccessForViewer(viewerId: string): Promise<PrivateAccess[]>;
 
   // likes, views, blocks
-  addLike(l: Like): Promise<void>;
+  addLike(l: Like): Promise<void>; // upsert: a later priority like upgrades a plain one
   removeLike(fromId: string, toId: string): Promise<void>;
   listLikesTo(memberId: string): Promise<Like[]>;
   listLikesFrom(memberId: string): Promise<Like[]>;
+  addPass(p: Pass): Promise<void>;
+  listPassesFrom(memberId: string, sinceIso: string): Promise<Pass[]>;
   recordView(v: View): Promise<void>; // keeps the latest view per pair
   listViewsOf(memberId: string): Promise<View[]>;
   addBlock(b: Block): Promise<void>;
@@ -96,7 +98,7 @@ export interface SiteRepo {
 
   // admin stats
   stats(nowIso: string): Promise<{
-    members: number; activeToday: number; newThisWeek: number; premium: number; messagesToday: number;
+    members: number; activeToday: number; newThisWeek: number; paid: number; messagesToday: number;
   }>;
 }
 

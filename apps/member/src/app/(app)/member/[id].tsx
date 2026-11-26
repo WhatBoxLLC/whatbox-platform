@@ -66,6 +66,9 @@ export default function ProfileScreen() {
                 </View>
               </>
             ) : null}
+            {p.publicPhotosLocked > 0 ? (
+              <Notice tone="info" icon="lock" title={`${p.publicPhotosLocked} more photo${p.publicPhotosLocked === 1 ? '' : 's'}`}>{p.upgradeHint ?? 'Upgrade to see all photos.'}</Notice>
+            ) : null}
 
             {p.privatePhotoCount > 0 ? (
               <Card pad={18} style={{ gap: 14, marginTop: 6 }}>
@@ -77,7 +80,8 @@ export default function ProfileScreen() {
                     </View>
                     <Txt sub size={14}>{privNote}</Txt>
                   </View>
-                  {p.privateAccess === 'none' ? <Btn label="Request access" size="sm" onPress={() => act(() => api.requestAccess(p.id))} /> : null}
+                  {p.privateAccess === 'none' && p.canRequestPrivate ? <Btn label="Request access" size="sm" onPress={() => act(() => api.requestAccess(p.id))} /> : null}
+                  {p.privateAccess === 'none' && !p.canRequestPrivate ? <Btn label="Upgrade to request" kind="secondary" size="sm" icon="lock" onPress={() => router.push('/me?tab=settings')} /> : null}
                   {p.privateAccess === 'requested' ? <Btn label="Requested" kind="soft" size="sm" disabled /> : null}
                 </View>
                 <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -95,6 +99,7 @@ export default function ProfileScreen() {
             <View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <H size={40}>{p.displayName}, {p.age}</H>
+                {p.tier === 'vip' ? <Badge label="★ VIP" tone="alert" /> : null}
                 {p.verified ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: t.accentSoft, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
                     <Icon name="check" size={14} color={t.accent} stroke={2.6} />

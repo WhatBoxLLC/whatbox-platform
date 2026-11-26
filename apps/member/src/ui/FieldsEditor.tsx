@@ -1,6 +1,8 @@
 // Renders the custom profile fields each site defines in Owner Admin.
-import type { Member, ProfileFieldDef } from '@whatbox/core';
+import { cmToFeetInches, feetInchesToCm, type Member, type ProfileFieldDef } from '@whatbox/core';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
+import { useSession } from '../lib/session';
 import { ChipPicker, Field, Toggle, Txt } from './kit';
 
 export function FieldsEditor({ fields, value, onChange, onlyRequired }: {
@@ -21,6 +23,8 @@ export function FieldsEditor({ fields, value, onChange, onlyRequired }: {
                 {f.sensitive ? <Txt sub size={12}>Encrypted and only shown to signed-in members.</Txt> : null}
               </View>
             );
+          case 'height':
+            return <HeightInput key={f.key} label={label} cm={typeof value[f.key] === 'number' ? (value[f.key] as number) : undefined} onChange={(cm) => set(f.key, cm)} />;
           case 'boolean':
             return <Toggle key={f.key} label={label} value={!!value[f.key]} onChange={(v) => set(f.key, v)} />;
           case 'number':
@@ -29,6 +33,37 @@ export function FieldsEditor({ fields, value, onChange, onlyRequired }: {
             return <Field key={f.key} label={label} value={(value[f.key] as string) ?? ''} onChangeText={(v) => set(f.key, v)} />;
         }
       })}
+    </View>
+  );
+}
+
+// Exact height. Entered in the member's preferred units, stored in cm, always shown in both.
+function HeightInput({ label, cm, onChange }: { label: string; cm?: number; onChange: (cm: number | undefined) => void }) {
+  const { me, site } = useSession();
+  const units = me?.member.unitsResolved ?? site.units;
+  const fi = cm ? cmToFeetInches(cm) : null;
+  const [ft, setFt] = useState(fi ? String(fi.ft) : '');
+  const [inch, setInch] = useState(fi ? String(fi.inch) : '');
+  const [metric, setMetric] = useState(cm ? String(cm) : '');
+  useEffect(() => {
+    if (units === 'metric') return;
+    const f = Number(ft), i = Number(inch || 0);
+    if (ft === '') onChange(undefined);
+    else if (f >= 3 && f <= 8 && i >= 0 && i < 12) onChange(feetInchesToCm(f, i));
+  }, [ft, inch]); // eslint-disable-line react-hooks/exhaustive-deps
+  const other = cm ? (units === 'metric' ? `${fi!.ft}′ ${fi!.inch}″` : `${cm} cm`) : '';
+  return (
+    <View style={{ gap: 4 }}>
+      {units === 'metric' ? (
+        <Field label={`${label}, cm`} keyboardType="number-pad" value={metric} placeholder="170"
+          onChangeText={(v) => { setMetric(v); const n = Number(v); onChange(v === '' ? undefined : n >= 90 && n <= 250 ? n : cm); }} />
+      ) : (
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <View style={{ flex: 1 }}><Field label={`${label}, feet`} keyboardType="number-pad" value={ft} placeholder="5" onChangeText={setFt} /></View>
+          <View style={{ flex: 1 }}><Field label="inches" keyboardType="number-pad" value={inch} placeholder="8" onChangeText={setInch} /></View>
+        </View>
+      )}
+      {other ? <Txt sub size={12}>{`That's ${other}.`}</Txt> : null}
     </View>
   );
 }

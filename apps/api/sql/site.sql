@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS members (
   lat               double precision NOT NULL,
   lng               double precision NOT NULL,
   city              text NOT NULL,
-  premium           boolean NOT NULL,
+  premium           boolean NOT NULL, -- true for Paid or VIP; the tier itself is in doc
   email_hash        text UNIQUE,
   phone_hash        text UNIQUE,
   created_at        timestamptz NOT NULL,
@@ -48,6 +48,16 @@ CREATE TABLE IF NOT EXISTS likes (
   PRIMARY KEY (from_id, to_id)
 );
 CREATE INDEX IF NOT EXISTS likes_to_idx ON likes (to_id);
+-- VIP like: the sender spent tokens to be shown first
+ALTER TABLE likes ADD COLUMN IF NOT EXISTS vip boolean NOT NULL DEFAULT false;
+
+-- "Not for me" in Discover. The profile can come back after the site's cooldown.
+CREATE TABLE IF NOT EXISTS passes (
+  from_id  text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  to_id    text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  at       timestamptz NOT NULL,
+  PRIMARY KEY (from_id, to_id)
+);
 
 CREATE TABLE IF NOT EXISTS views (
   viewer_id  text NOT NULL REFERENCES members(id) ON DELETE CASCADE,

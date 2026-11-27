@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { getPages, getSite } from '../lib/site';
+import { appUrl, getPages, getSite } from '../lib/site';
 import './globals.css';
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -32,7 +32,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     '--ground': t.ground, '--surface': t.surface, '--ink': t.ink, '--sub': t.sub, '--line': t.line, '--accent': t.accent,
     '--accentSoft': t.accentSoft, '--heading': `'${t.headingFont}'`, '--body': `'${t.bodyFont}'`, '--radius': t.radius + 'px',
   } as React.CSSProperties;
-  const app = process.env.APP_URL ?? 'http://localhost:8081';
+  const app = await appUrl();
   return (
     <html lang="en">
       <head>{t.fontsHref ? <link rel="stylesheet" href={t.fontsHref} /> : null}</head>

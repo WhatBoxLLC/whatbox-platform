@@ -112,7 +112,7 @@ export function safeReturnUrl(site: Site, url: unknown): string | null {
   if (typeof url !== 'string') return null;
   try {
     const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, '');
+    const host = u.hostname.replace(/^(www|app)\./, '');
     if (u.protocol === 'https:' && site.domains.some((d) => d.replace(/^www\./, '') === host)) return u.toString();
     if (config.corsOrigins.includes(u.origin)) return u.toString();
     // The native apps return through their own scheme, e.g. afterh://membership

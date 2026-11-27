@@ -1,9 +1,10 @@
 // Public, crawlable landing page. Member profiles never appear here on sensitive sites.
-import { APP_URL, getPages, getSite } from '../lib/site';
+import { appUrl, getPages, getSite } from '../lib/site';
 
 export default async function Home() {
   const site = await getSite();
   const pages = await getPages();
+  const APP_URL = await appUrl();
   const sensitive = site.mode === 'sensitive';
   const guides = pages.filter((p) => p.placement === 'guides');
   const faq = pages.find((p) => p.slug === 'faq');

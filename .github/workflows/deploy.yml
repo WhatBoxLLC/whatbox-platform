@@ -1,0 +1,101 @@
+name: Deploy to Azure
+
+# Pushes to main deploy to dev. Prod is deployed by hand from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+permissions:
+  id-token: write # sign in to Azure with OIDC, no stored Azure password
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Settings and secrets per GitHub environment (dev, prod):
+    #   vars:    AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP
+    #   secrets: PG_ADMIN_PASSWORD, PAYPAL_JSON (optional), OAUTH_CLIENTS_JSON (optional), EXPO_ACCESS_TOKEN (optional)
+    environment: ${{ inputs.environment || 'dev' }}
+    env:
+      ENV: ${{ inputs.environment || 'dev' }}
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Infrastructure (registry, vault, database, storage, email)
+        id: base
+        run: |
+          out=$(az deployment group create -g "$RG" -f infra/main.bicep --name "base-$TAG" \
+            -p env="$ENV" deployApps=false postgresAdminPassword="$PG_PW" \
+               paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" \
+            --query properties.outputs -o json)
+          echo "acr=$(jq -r .acrName.value <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "kv=$(jq -r .keyVaultName.value <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "api=$(jq -r .apiUrl.value <<<"$out")" >> "$GITHUB_OUTPUT"
+        env:
+          PG_PW: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PAYPAL_JSON: ${{ secrets.PAYPAL_JSON || '{}' }}
+          OAUTH_JSON: ${{ secrets.OAUTH_CLIENTS_JSON || '{}' }}
+          EXPO_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
+
+      - name: Check site encryption keys exist
+        run: |
+          if ! az keyvault secret show --vault-name "${{ steps.base.outputs.kv }}" --name site-keys-json --query id -o tsv >/dev/null 2>&1; then
+            echo "::error::Run infra/scripts/bootstrap-secrets.sh ${{ steps.base.outputs.kv }} site_afterh site_hfriends site_datealittle first."
+            exit 1
+          fi
+
+      - name: Build images in Azure Container Registry
+        run: |
+          az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/api.Dockerfile -t "whatbox-api:$TAG" . &
+          az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/web.Dockerfile -t "whatbox-web:$TAG" . &
+          az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/member.Dockerfile -t "whatbox-member:$TAG" \
+            --build-arg EXPO_PUBLIC_API_URL="${{ steps.base.outputs.api }}" \
+            --build-arg EXPO_PUBLIC_OAUTH_JSON="${{ vars.EXPO_PUBLIC_OAUTH_JSON }}" . &
+          wait -n && wait -n && wait -n
+
+      - name: Container apps
+        run: |
+          az deployment group create -g "$RG" -f infra/main.bicep --name "apps-$TAG" \
+            -p env="$ENV" deployApps=true imageTag="$TAG" postgresAdminPassword="$PG_PW" \
+               paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" -o none
+        env:
+          PG_PW: ${{ secrets.PG_ADMIN_PASSWORD }}
+          PAYPAL_JSON: ${{ secrets.PAYPAL_JSON || '{}' }}
+          OAUTH_JSON: ${{ secrets.OAUTH_CLIENTS_JSON || '{}' }}
+          EXPO_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
+
+      - name: Database migrations
+        run: |
+          job="whatbox-$ENV-migrate"
+          exec=$(az containerapp job start -g "$RG" -n "$job" --query name -o tsv)
+          for i in $(seq 1 60); do
+            status=$(az containerapp job execution show -g "$RG" -n "$job" --job-execution-name "$exec" --query properties.status -o tsv)
+            echo "migrate: $status"
+            [ "$status" = "Succeeded" ] && exit 0
+            [ "$status" = "Failed" ] && exit 1
+            sleep 10
+          done
+          exit 1
+
+      - name: Health check
+        run: curl -sf --retry 10 --retry-delay 6 --retry-all-errors "${{ steps.base.outputs.api }}/healthz"

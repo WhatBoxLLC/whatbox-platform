@@ -8,11 +8,30 @@ import { LocalPhotoStore } from './photos';
 import { startCleanup } from './cleanup';
 
 async function main() {
-  const { platform, photos, events } = createPlatform();
+  const { platform, photos, events, control } = createPlatform();
   const app = await NestFactory.create(buildModule(platform), { bodyParser: false, logger: ['error', 'warn', 'log'] });
   app.use(json({ limit: config.photoStore === 'inline' ? '8mb' : '256kb' }));
   app.useGlobalFilters(new ErrorFilter());
-  app.enableCors({ origin: config.corsOrigins, allowedHeaders: ['Content-Type', 'Authorization', 'X-Site', 'X-Client-Platform'] });
+  // Browsers may call from the configured origins, or from https://<site domain> / https://app.<site domain>.
+  const corsCache = new Map<string, { ok: boolean; at: number }>();
+  const originAllowed = async (origin: string) => {
+    if (config.corsOrigins.includes(origin)) return true;
+    const hit = corsCache.get(origin);
+    if (hit && Date.now() - hit.at < 60_000) return hit.ok;
+    let ok = false;
+    try {
+      const u = new URL(origin);
+      const host = u.hostname.replace(/^(app|www)\./, '');
+      ok = u.protocol === 'https:' && !u.port && !!(await control.findSite(host))?.domains.includes(host);
+    } catch { ok = false; }
+    if (corsCache.size > 1000) corsCache.clear();
+    corsCache.set(origin, { ok, at: Date.now() });
+    return ok;
+  };
+  app.enableCors({
+    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => { if (!origin) return cb(null, false); originAllowed(origin).then((ok) => cb(null, ok), () => cb(null, false)); },
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Site', 'X-Client-Platform'],
+  });
   const http = app.getHttpAdapter().getInstance() as import('express').Express;
   // Only the load balancer's hop is trusted, so clients can't fake their IP for rate limits.
   http.set('trust proxy', config.trustProxyHops);
@@ -30,6 +49,10 @@ async function main() {
     // Member data must never sit in a shared cache.
     if (req.path.startsWith('/v1/')) res.set('Cache-Control', 'no-store');
     next();
+  });
+  // Liveness for Azure Container Apps probes: the process is up and the control database answers.
+  http.get('/healthz', async (_req, res) => {
+    try { await control.listSites(); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); }
   });
   // Live events (server-sent events). Clients connect with their normal session header.
   http.get('/v1/events', async (req, res) => {

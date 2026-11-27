@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/preview-dist
+**/.next
+**/.expo
+**/.data
+**/*.log
+**/.env
+**/.env.*
+**/*.tsbuildinfo
+.git
+.github
+infra

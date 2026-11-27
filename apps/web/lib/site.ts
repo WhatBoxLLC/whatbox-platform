@@ -4,12 +4,21 @@ import { headers } from 'next/headers';
 import { cache } from 'react';
 
 const API = process.env.API_URL ?? 'http://localhost:4000';
-export const APP_URL = process.env.APP_URL ?? 'http://localhost:8081';
+// Where "Join" and "Sign in" go. In Azure: APP_URL=https://app.{host}, so afterh.com links to app.afterh.com.
+export async function appUrl(): Promise<string> {
+  const tpl = process.env.APP_URL ?? 'http://localhost:8081';
+  if (!tpl.includes('{host}')) return tpl;
+  const host = await siteKey();
+  // Not on a real site domain (local dev, the default Azure address): use the member app's own address.
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) return process.env.APP_URL_DEFAULT ?? 'http://localhost:8081';
+  return tpl.replace('{host}', host);
+}
 
 export async function siteKey(): Promise<string> {
   const h = await headers();
   const host = (h.get('x-forwarded-host') ?? h.get('host') ?? '').split(':')[0].replace(/^www\./, '');
-  if (!host || host === 'localhost' || host === '127.0.0.1') return process.env.DEFAULT_SITE ?? 'afterh';
+  // Local dev and the default Azure address aren't site domains: use the configured default site.
+  if (!host || host === 'localhost' || host === '127.0.0.1' || host.endsWith('.azurecontainerapps.io')) return process.env.DEFAULT_SITE ?? 'afterh';
   return host;
 }
 

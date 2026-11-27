@@ -2,7 +2,7 @@ import type { MemberApi, MemberEvent, MyProfile, PublicSite } from '@whatbox/cor
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { registerForPush } from './push';
 import { Platform } from 'react-native';
-import { DEFAULT_SITE, memberApi } from './backend';
+import { DEFAULT_SITE, IS_PREVIEW, memberApi } from './backend';
 import { storage } from './storage';
 
 interface SessionState {
@@ -30,6 +30,9 @@ function initialSite(): string {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     const q = new URLSearchParams(window.location.search).get('site');
     if (q) return q;
+    // Production: app.afterh.com serves AfterH. The API matches the bare domain.
+    const host = window.location.hostname;
+    if (!IS_PREVIEW && host && host !== 'localhost' && !/^[\d.]+$/.test(host) && !host.endsWith('.azurecontainerapps.io')) return host.replace(/^(app|www)\./, '');
   }
   return DEFAULT_SITE;
 }

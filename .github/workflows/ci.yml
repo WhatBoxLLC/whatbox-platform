@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Local-only test values. Never real keys.
+      PG_SERVER_URL: postgres://postgres@localhost:5432
+      DEV_MASTER_KEY: ci-only-key
+      EXPOSE_DEV_CODES: 'true'
+      PHOTO_STORE: local
+      PHOTO_DIR: /tmp/photos
+      RATE_LIMIT_SCALE: '100'
+      PAYMENTS_STUB: 'true'
+      ALLOW_SELF_SERVE_TIER: 'true'
+      CLEANUP_MINUTES: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Core tests
+        run: npm test -w @whatbox/core
+      - name: API unit tests
+        run: npm test -w @whatbox/api
+      - name: Database setup
+        run: npm run db:migrate && npm run db:seed
+      - name: End-to-end smoke test (two API instances)
+        run: |
+          (npm start -w @whatbox/api > /tmp/api1.log 2>&1 &)
+          (PORT=4001 npm start -w @whatbox/api > /tmp/api2.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf localhost:4000/healthz >/dev/null && curl -sf localhost:4001/healthz >/dev/null && break; sleep 1; done
+          API_URL_2=http://localhost:4001 npm run smoke -w @whatbox/api
+      - name: API logs
+        if: failure()
+        run: tail -n 100 /tmp/api1.log /tmp/api2.log
+
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Bicep
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null

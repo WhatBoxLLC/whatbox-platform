@@ -19,7 +19,7 @@ export const config = {
   acsEmailFromJson: process.env.ACS_EMAIL_FROM_JSON ?? '', // {"site_afterh":"DoNotReply@mail.afterh.com","*":"..."}
   acsSmsFromJson: process.env.ACS_SMS_FROM_JSON ?? '', // {"*":"+18005550100"}
   push: process.env.PUSH ?? 'none', // none | expo
-  expoAccessToken: process.env.EXPO_ACCESS_TOKEN ?? '',
+  expoAccessToken: process.env.EXPO_ACCESS_TOKEN === 'none' ? '' : process.env.EXPO_ACCESS_TOKEN ?? '',
   oauthClientsJson: process.env.OAUTH_CLIENTS_JSON ?? '', // per-site Apple / Google client IDs
   // Photos: local (dev disk), azure (Blob, container per site) or inline (prototype data URIs only)
   photoStore: (process.env.PHOTO_STORE ?? 'local') as 'local' | 'azure' | 'inline',

@@ -1,8 +1,8 @@
 # Deploying WhatBox to Azure
 
-Everything runs in one Azure resource group per environment. `dev` lives in Nichesoft's
-subscription while we build; `prod` moves to WhatBox's own subscription at go-live. The
-template has no subscription-specific values, so moving is a fresh deploy plus a database restore.
+Everything runs in one Azure resource group per environment (`whatbox-dev`, `whatbox-prod`),
+both in WhatBox's own Azure account. The template has no subscription-specific values, so moving
+to another subscription is a fresh deploy plus a database restore.
 
 ## What gets created (`infra/main.bicep`)
 
@@ -26,7 +26,8 @@ logs). Web and the member app scale to zero in dev.
 
 1. In the Azure portal, open **Cloud Shell** (Bash) and run `infra/scripts/setup-azure.sh dev`
    (paste its contents). It creates the resource group and lets this repo's GitHub Actions deploy,
-   using OIDC so no Azure password is stored in GitHub. It prints five values.
+   using OIDC so no Azure password is stored in GitHub. It trusts both forms of GitHub's token
+   subject (names, and names with ids). It prints five values.
 2. In GitHub → Settings → Environments, create `dev` and add the four printed variables and the
    `PG_ADMIN_PASSWORD` secret. Optional secrets: `PAYPAL_JSON`, `OAUTH_CLIENTS_JSON`, `EXPO_ACCESS_TOKEN`.
 3. Run **Deploy to Azure** from the Actions tab. It creates everything, generates each site's
@@ -35,7 +36,9 @@ logs). Web and the member app scale to zero in dev.
 
 Back up the Key Vault: losing a site's key makes its members' encrypted contact details unreadable.
 
-Every push to `main` then redeploys `dev`. `prod` is deployed by hand from the Actions tab.
+For now both `dev` and `prod` are deployed by hand from the Actions tab (Run workflow, pick the
+environment). Automatic deploys of `dev` on every push to `main` get switched on once the first
+deploy is clean.
 
 ## Adding a site
 

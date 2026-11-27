@@ -144,7 +144,7 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   const temp = createHttpMemberApi(base, 'afterh', 'web');
   const ts = await temp.startVerification('email', `delete.me.${Date.now()}@example.com`);
   temp.setToken((await temp.verify(ts.challengeId, ts.devCode!)).token);
-  await temp.updateMe({ displayName: 'Temp', birthYear: 1990, gender: 'man', seeking: ['woman'], postal: '80202', fields: { hsv_status: 'HSV-1' } });
+  await temp.updateMe({ displayName: 'Temp', birthYear: 1990, gender: 'man', seeking: ['woman'], postal: '80202', fields: { hsv_status: ['HSV-1'] } });
   await temp.like(rosa.id, true);
   await temp.deleteAccount('DELETE');
 

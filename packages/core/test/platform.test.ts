@@ -45,7 +45,7 @@ test('verification creates a session; wrong code is rejected', async () => {
   const me = await api.me();
   assert.equal(me.member.profileComplete, false);
   await assert.rejects(api.search({}), /Finish your profile/);
-  await api.updateMe({ displayName: 'Jordan', birthYear: 1990, gender: 'man', seeking: ['woman'], postal: '80202', fields: { hsv_status: 'HSV-1' } });
+  await api.updateMe({ displayName: 'Jordan', birthYear: 1990, gender: 'man', seeking: ['woman'], postal: '80202', fields: { hsv_status: ['HSV-1'] } });
   const res = await api.search({});
   assert.ok(res.total > 0);
 });
@@ -487,4 +487,23 @@ test('cleanup: cancelled memberships lapse at period end; expired sessions go aw
   now = new Date('2027-06-01T00:00:00Z'); // sessions last well under six months
   await mp.platform.cleanup();
   await assert.rejects(api.me(), (e: ApiError) => e.status === 401);
+});
+
+test('genders, multi-select status, exclusive choices and the Other caution', async () => {
+  const mp = await createMemoryPlatform();
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await a.startVerification('email', 'trans.member@example.com');
+  a.setToken((await a.verify(s.challengeId, s.devCode!)).token);
+  await assert.rejects(a.updateMe({ gender: 'robot' as any }), /listed options/);
+  await assert.rejects(a.updateMe({ fields: { hsv_status: ['HSV-1', 'None'] } }), /can't be combined/);
+  await a.updateMe({ displayName: 'Riley', birthYear: 1988, gender: 'trans_mtf', seeking: ['man', 'trans_ftm'], postal: '80202', fields: { hsv_status: ['HSV-2', 'HPV', 'Other'] } });
+  const b = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const t = await b.startVerification('email', DEMO_MEMBER_EMAIL);
+  b.setToken((await b.verify(t.challengeId, t.devCode!)).token);
+  const riley = (await b.search({ seeking: ['trans_mtf'], withinMiles: null, withPhoto: false })).people.find((p) => p.displayName === 'Riley');
+  assert.ok(riley, 'search by the new gender finds the member');
+  const p = await b.profile(riley!.id);
+  assert.equal(p.gender, 'trans_mtf');
+  assert.equal(p.cautions.length, 1);
+  assert.match(p.cautions[0], /OTHER/);
 });

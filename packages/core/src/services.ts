@@ -5,7 +5,7 @@ import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCr
 import { lookupPostal } from './geo';
 import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
 import { systemClock } from './repo';
-import { DEFAULT_LICENSING } from './types';
+import { DEFAULT_LICENSING, isGender } from './types';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
@@ -381,10 +381,14 @@ export class Platform {
       if (year - patch.birthYear > 100) throw new RuleError('bad_age', 'Check your birth year.');
       m.birthYear = patch.birthYear;
     }
-    if (patch.gender) m.gender = patch.gender;
+    if (patch.gender) {
+      if (!isGender(patch.gender)) throw new RuleError('bad_gender', 'Choose one of the listed options.');
+      m.gender = patch.gender;
+    }
     if (patch.seeking) {
       if (!patch.seeking.length) throw new RuleError('bad_seeking', 'Choose who you want to meet.');
-      m.seeking = patch.seeking;
+      if (!patch.seeking.every(isGender)) throw new RuleError('bad_seeking', 'Choose from the listed options.');
+      m.seeking = [...new Set(patch.seeking)];
     }
     if (patch.ageMin !== undefined) m.ageMin = Math.max(18, patch.ageMin);
     if (patch.ageMax !== undefined) m.ageMax = Math.min(99, patch.ageMax);
@@ -602,10 +606,13 @@ export class Platform {
     const unlocked = access?.status === 'granted';
     const blocks = await ctx.repo.listBlocksInvolving(ctx.me.id);
     const details: MemberProfile['details'] = [];
+    const cautions: string[] = [];
     let interests: string[] = [];
     for (const def of [...ctx.site.fields].sort((a, b) => a.order - b.order)) {
       const v = m.fields[def.key];
-      if (v === undefined || v === '' || def.showOnProfile === false) continue;
+      if (v === undefined || v === '') continue;
+      if (def.caution && (Array.isArray(v) ? v.includes(def.caution.option) : v === def.caution.option)) cautions.push(def.caution.message);
+      if (def.showOnProfile === false) continue;
       if (def.section === 'interests' && Array.isArray(v)) { interests = interests.concat(v); continue; }
       details.push({ key: def.key, label: def.label, value: this.fieldText(ctx, def, v) });
     }
@@ -619,7 +626,7 @@ export class Platform {
     return {
       ...card,
       about: m.about, gender: m.gender, seeking: m.seeking, ageMin: m.ageMin, ageMax: m.ageMax, lastActiveAt: m.lastActiveAt,
-      details, interests,
+      details, cautions, interests,
       publicPhotos: perms.seePublicPhotos ? gallery.map((p) => this.photoView(ctx, p, { owner: false })) : [],
       publicPhotosLocked: perms.seePublicPhotos ? 0 : gallery.length,
       canRequestPrivate: perms.requestPrivatePhotos,
@@ -1481,6 +1488,9 @@ export class Platform {
     if ((def.type === 'select' || def.type === 'multiselect') && !def.options?.length) {
       throw new RuleError('no_options', 'Choice fields need at least one option.');
     }
+    if (def.exclusive) def.exclusive = def.exclusive.filter((o) => def.options?.includes(o));
+    if (def.caution && (!def.options?.includes(def.caution.option) || !def.caution.message?.trim())) delete def.caution;
+    if (def.caution) def.caution = { option: def.caution.option, message: def.caution.message.trim().slice(0, 240) };
     const i = site.fields.findIndex((f) => f.key === def.key);
     if (i >= 0) site.fields[i] = def;
     else site.fields.push({ ...def, order: def.order ?? site.fields.length + 1 });
@@ -1563,7 +1573,12 @@ function validateField(def: ProfileFieldDef, value: unknown) {
   const bad = () => { throw new RuleError('bad_field', `Check the value for ${def.label}.`); };
   switch (def.type) {
     case 'select': if (typeof value !== 'string' || (value && !def.options?.includes(value))) bad(); break;
-    case 'multiselect': if (!Array.isArray(value) || value.some((v) => !def.options?.includes(v))) bad(); break;
+    case 'multiselect':
+      if (!Array.isArray(value) || value.some((v) => !def.options?.includes(v))) bad();
+      if ((value as string[]).length > 1 && (value as string[]).some((v) => def.exclusive?.includes(v))) {
+        throw new RuleError('bad_field', `For ${def.label}, "${(value as string[]).find((v) => def.exclusive?.includes(v))}" can't be combined with other choices.`);
+      }
+      break;
     case 'number': if (typeof value !== 'number' || !Number.isFinite(value)) bad(); break;
     case 'boolean': if (typeof value !== 'boolean') bad(); break;
     case 'text': if (typeof value !== 'string' || value.length > 200) bad(); break;

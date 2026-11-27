@@ -1,4 +1,4 @@
-import type { Gender, MemberCard, SearchFilters, SearchResult } from '@whatbox/core';
+import { GENDERS, type MemberCard, type SearchFilters, type SearchResult } from '@whatbox/core';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
@@ -7,9 +7,6 @@ import {
   Badge, Btn, Card, Check, ChipPicker, Field, Grid, H, Icon, Loading, PhotoTile, Txt, useTheme, useWide,
 } from '../../ui/kit';
 
-const SEEK: { label: string; value: Gender[] }[] = [
-  { label: 'Women', value: ['woman'] }, { label: 'Men', value: ['man'] }, { label: 'Everyone', value: ['woman', 'man', 'nonbinary'] },
-];
 const DIST: { label: string; value: number | null }[] = [
   { label: '10 mi', value: 10 }, { label: '25 mi', value: 25 }, { label: '50 mi', value: 50 }, { label: '100 mi', value: 100 }, { label: 'Anywhere', value: null },
 ];
@@ -36,12 +33,12 @@ export default function Browse() {
 
   const apply = () => { setFilters({ ...draft, page: 1 }); setShowFilters(false); };
   const filterable = site.fields.filter((f) => f.filterable && (f.type === 'select' || f.type === 'multiselect'));
-  const seekLabel = SEEK.find((s) => s.value.length === draft.seeking?.length && s.value.every((v) => draft.seeking?.includes(v)))?.label;
 
   const panel = (
     <Card style={{ gap: 18 }}>
       <H size={18} level={2}>Filters</H>
-      <ChipPicker label="Looking for" options={SEEK.map((s) => s.label)} value={seekLabel} onChange={(l: string) => setDraft({ ...draft, seeking: SEEK.find((s) => s.label === l)!.value })} />
+      <ChipPicker label="Looking for" multi options={GENDERS.map((g) => g.plural)} value={(draft.seeking ?? []).map((v) => GENDERS.find((g) => g.value === v)!.plural)}
+        onChange={(ls: string[]) => { if (ls.length) setDraft({ ...draft, seeking: ls.map((l) => GENDERS.find((g) => g.plural === l)!.value) }); }} />
       <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-end' }}>
         <View style={{ flex: 1 }}><Field label="Age from" keyboardType="number-pad" value={String(draft.ageMin ?? '')} onChangeText={(v) => setDraft({ ...draft, ageMin: Number(v) || 18 })} /></View>
         <View style={{ flex: 1 }}><Field label="to" keyboardType="number-pad" value={String(draft.ageMax ?? '')} onChangeText={(v) => setDraft({ ...draft, ageMax: Number(v) || 99 })} /></View>

@@ -1,4 +1,4 @@
-import { ApiError, type MemberProfile, type PhotoView } from '@whatbox/core';
+import { ApiError, GENDERS, type MemberProfile, type PhotoView } from '@whatbox/core';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
@@ -146,6 +146,8 @@ export default function ProfileScreen() {
               </Card>
             ) : null}
 
+            {p.cautions?.map((c) => <Notice key={c} tone="error" icon="flag" title="Please ask first">{c}</Notice>)}
+
             <Card>
               <H size={18} level={2} style={{ marginBottom: 8 }}>About me</H>
               <Txt>{p.about || `${p.displayName} hasn't written anything yet.`}</Txt>
@@ -155,7 +157,7 @@ export default function ProfileScreen() {
               <Card>
                 <H size={18} level={2} style={{ marginBottom: 14 }}>Details</H>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: 14 }}>
-                  <Detail label="Looking for" value={`${p.seeking.map((s) => ({ woman: 'Women', man: 'Men', nonbinary: 'Nonbinary people' })[s]).join(', ')}, ${p.ageMin} to ${p.ageMax}`} />
+                  <Detail label="Looking for" value={`${p.seeking.map((s) => GENDERS.find((g) => g.value === s)?.plural ?? s).join(', ')}, ${p.ageMin} to ${p.ageMax}`} />
                   {p.details.map((d) => <Detail key={d.key} label={d.label} value={d.value} />)}
                 </View>
               </Card>

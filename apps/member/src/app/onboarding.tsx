@@ -1,4 +1,4 @@
-import { ApiError, type Gender, type Member } from '@whatbox/core';
+import { ApiError, GENDERS, type Gender, type Member } from '@whatbox/core';
 import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
@@ -8,10 +8,6 @@ import { AuthFrame } from '../ui/AuthFrame';
 import { FieldsEditor } from '../ui/FieldsEditor';
 import { Btn, ChipPicker, ErrorText, Eyebrow, Field, H, Notice, Txt } from '../ui/kit';
 import { PhotoManager } from '../ui/PhotoManager';
-
-const GENDERS: { label: string; value: Gender }[] = [
-  { label: 'Woman', value: 'woman' }, { label: 'Man', value: 'man' }, { label: 'Nonbinary', value: 'nonbinary' },
-];
 
 export default function Onboarding() {
   const { api, me, setMe, site, signedIn } = useSession();
@@ -50,6 +46,7 @@ export default function Onboarding() {
           <Field label="Birth year" value={year} onChangeText={(v) => setYear(v.replace(/\D/g, '').slice(0, 4))} placeholder="1988" keyboardType="number-pad" hint="You must be 18 or older. Only your age is shown." />
           <ChipPicker label="I am a" options={GENDERS.map((g) => g.label)} value={gender ? label(gender) : undefined} onChange={(v: string) => setGender(GENDERS.find((g) => g.label === v)!.value)} />
           <ChipPicker label="I want to meet" multi options={GENDERS.map((g) => g.label)} value={seeking.map(label)} onChange={(v: string[]) => setSeeking(v.map((x) => GENDERS.find((g) => g.label === x)!.value))} />
+          <Txt sub size={13} style={{ marginTop: -8 }}>Pick all that apply.</Txt>
           <Field label="ZIP code" value={postal} onChangeText={setPostal} placeholder="80202" keyboardType="number-pad" hint={IS_PREVIEW ? 'The prototype knows Denver-area ZIPs like 80202, 80301 and 80226, plus a few big cities.' : 'Used to show distance. Your exact location is never shared.'} />
           <ErrorText error={error} />
           <Btn label="Continue" size="lg" busy={busy} onPress={() => {

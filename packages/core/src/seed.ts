@@ -33,6 +33,30 @@ function settings(over: Partial<SiteSettings>): SiteSettings {
 
 const tierRoll = (x: number): Tier => (x < 0.1 ? 'vip' : x < 0.25 ? 'paid' : 'free');
 
+// AfterH status: people often have more than one, so it's multi-select. "Other" warns viewers.
+export const STATUS_FIELD: ProfileFieldDef = {
+  key: 'hsv_status', label: 'Status', type: 'multiselect',
+  options: ['HSV-1', 'HSV-2', 'Herpes (type unsure)', 'HPV', 'Other', 'None', 'Prefer not to say'],
+  exclusive: ['None', 'Prefer not to say'],
+  caution: { option: 'Other', message: 'This member also marked OTHER as their STD type. We suggest asking them for more details.' },
+  required: true, filterable: true, showOnProfile: true, sensitive: true, section: 'details', order: 1,
+};
+
+/** Brings older site field definitions up to date. Returns true if anything changed. */
+export function upgradeSiteFields(site: Site): boolean {
+  const i = site.fields.findIndex((f) => f.key === 'hsv_status' && f.type === 'select');
+  if (i < 0) return false;
+  site.fields[i] = { ...STATUS_FIELD, label: site.fields[i].label, order: site.fields[i].order };
+  return true;
+}
+
+/** Reads a stored field value in the shape its definition now expects (older single answers become a list). */
+export function normalizeFieldValue(def: ProfileFieldDef, v: unknown): unknown {
+  if (def.type !== 'multiselect' || typeof v !== 'string' || !v) return v;
+  if (def.key === 'hsv_status' && v === 'Both') return ['HSV-1', 'HSV-2'];
+  return [v];
+}
+
 const commonFields = (start: number): ProfileFieldDef[] => [
   { key: 'relationship_goal', label: 'Relationship goal', type: 'select', options: ['Long-term', 'Dating', 'Friendship', 'Not sure yet'], filterable: true, showOnProfile: true, section: 'details', order: start },
   { key: 'height', label: 'Height', type: 'height', showOnProfile: true, section: 'details', order: start + 1 },
@@ -59,7 +83,7 @@ export function seedSites(now: Date): Site[] {
         billingDescriptor: 'WBX MEMBERSHIP',
       }),
       fields: [
-        { key: 'hsv_status', label: 'Status', type: 'select', options: ['HSV-1', 'HSV-2', 'Both', 'Prefer not to say'], required: true, filterable: true, showOnProfile: true, sensitive: true, section: 'details', order: 1 },
+        STATUS_FIELD,
         ...commonFields(2),
       ],
       ownerIds: ['adm_owner'], createdAt: created, status: 'active', licensing: { ...DEFAULT_LICENSING, owned: true },
@@ -174,9 +198,10 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     const lineIdx = big && i < 9 ? i : Math.floor(r() * LINES.length);
     const fields: Member['fields'] = {};
     for (const f of fieldDefs) {
-      if (f.type === 'select' && f.options) fields[f.key] = f.key === 'hsv_status' ? pick(r, ['HSV-1', 'HSV-2', 'HSV-2', 'Both', 'Prefer not to say']) : pick(r, f.options);
-      if (f.type === 'height') fields[f.key] = (gender === 'man' ? 170 : 155) + ((i * 37) % 23);
-      if (f.type === 'multiselect' && f.options) fields[f.key] = some(r, f.options.filter((o) => o !== 'Prefer not to say'), f.key === 'interests' ? 3 + Math.floor(r() * 3) : 1);
+      if (f.key === 'hsv_status') fields[f.key] = pick(r, [['HSV-1'], ['HSV-2'], ['HSV-2'], ['HSV-1', 'HSV-2'], ['HSV-2', 'HPV'], ['HSV-2', 'Other'], ['Herpes (type unsure)'], ['Prefer not to say']]);
+      else if (f.type === 'select' && f.options) fields[f.key] = pick(r, f.options);
+      else if (f.type === 'height') fields[f.key] = (gender === 'man' ? 170 : 155) + ((i * 37) % 23);
+      else if (f.type === 'multiselect' && f.options) fields[f.key] = some(r, f.options.filter((o) => o !== 'Prefer not to say'), f.key === 'interests' ? 3 + Math.floor(r() * 3) : 1);
     }
     const online = r() < 0.3;
     const m: Member = {
@@ -191,7 +216,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     if (i % 7 === 5) { m.createdAt = t(60 * 24 * (1 + (i % 9))); m.verifiedAt = m.createdAt; } // a few new members
     if (name === 'Rosa' && big) {
       m.about = "Weekend hiker, weekday baker. I was diagnosed a few years ago and it took a while to feel like myself again. Now I'm ready to meet someone kind, curious and up for a sunrise trail now and then.";
-      m.fields = { ...m.fields, hsv_status: 'HSV-2', relationship_goal: 'Long-term', height: 168, kids: 'None, open to it', smoking: 'Never', drinking: 'Socially', interests: ['Hiking', 'Baking', 'Dogs', 'Podcasts', 'Camping'] };
+      m.fields = { ...m.fields, hsv_status: ['HSV-2'], relationship_goal: 'Long-term', height: 168, kids: 'None, open to it', smoking: 'Never', drinking: 'Socially', interests: ['Hiking', 'Baking', 'Dogs', 'Podcasts', 'Camping'] };
       m.ageMin = 34; m.ageMax = 45; m.lastActiveAt = t(3); m.tier = 'paid';
     }
     members.push(m);
@@ -220,7 +245,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     ...(opts.demoMemberHash ?? {}),
   };
   for (const f of fieldDefs) {
-    if (f.key === 'hsv_status') demo.fields[f.key] = 'HSV-1';
+    if (f.key === 'hsv_status') demo.fields[f.key] = ['HSV-1'];
     else if (f.key === 'interests') demo.fields[f.key] = ['Hiking', 'Cooking', 'Live music', 'Dogs'];
     else if (f.key === 'relationship_goal') demo.fields[f.key] = 'Long-term';
     else if (f.type === 'height') demo.fields[f.key] = 180;

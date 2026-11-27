@@ -92,6 +92,10 @@ export interface ProfileFieldDef {
   sensitive?: boolean; // encrypted at rest, never in public teasers
   section?: 'details' | 'interests';
   order: number;
+  /** multiselect only: options that can't be combined with any other, e.g. "None", "Prefer not to say" */
+  exclusive?: string[];
+  /** When a member picks this option, everyone viewing their profile sees this message in red. */
+  caution?: { option: string; message: string };
 }
 
 export interface Site {
@@ -141,7 +145,16 @@ export interface AdminUser {
 
 // ---------- Per-site records ----------
 
-export type Gender = 'woman' | 'man' | 'nonbinary';
+export type Gender = 'woman' | 'man' | 'nonbinary' | 'trans_mtf' | 'trans_ftm';
+/** Every gender, in the order the sign-up form shows them. */
+export const GENDERS: { value: Gender; label: string; plural: string }[] = [
+  { value: 'woman', label: 'Woman', plural: 'Women' },
+  { value: 'man', label: 'Man', plural: 'Men' },
+  { value: 'nonbinary', label: 'Non-Binary', plural: 'Non-Binary people' },
+  { value: 'trans_mtf', label: 'Trans M2F', plural: 'Trans M2F' },
+  { value: 'trans_ftm', label: 'Trans F2M', plural: 'Trans F2M' },
+];
+export const isGender = (v: unknown): v is Gender => GENDERS.some((g) => g.value === v);
 export type MemberStatus = 'active' | 'suspended';
 
 export interface Member {
@@ -312,6 +325,8 @@ export interface MemberProfile extends MemberCard {
   ageMax: number;
   lastActiveAt: string;
   details: { key: string; label: string; value: string }[];
+  /** Red notices for viewers, e.g. a member who marked "Other" as their status. */
+  cautions: string[];
   interests: string[];
   publicPhotos: PhotoView[];
   privatePhotos: PhotoView[];

@@ -1,9 +1,19 @@
 // Renders the custom profile fields each site defines in Owner Admin.
-import { cmToFeetInches, feetInchesToCm, type Member, type ProfileFieldDef } from '@whatbox/core';
+import { cmToFeetInches, feetInchesToCm, normalizeFieldValue, type Member, type ProfileFieldDef } from '@whatbox/core';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { useSession } from '../lib/session';
 import { ChipPicker, Field, Toggle, Txt } from './kit';
+
+// Tapping an exclusive option ("None", "Prefer not to say") clears the rest, and tapping anything else clears it.
+function exclusivePick(f: ProfileFieldDef, prev: string[] | undefined, next: string[]): string[] {
+  const ex = f.exclusive ?? [];
+  if (!ex.length) return next;
+  const added = next.find((v) => !(prev ?? []).includes(v));
+  if (added && ex.includes(added)) return [added];
+  if (added) return next.filter((v) => !ex.includes(v));
+  return next;
+}
 
 export function FieldsEditor({ fields, value, onChange, onlyRequired }: {
   fields: ProfileFieldDef[]; value: Member['fields']; onChange: (v: Member['fields']) => void; onlyRequired?: boolean;
@@ -19,7 +29,9 @@ export function FieldsEditor({ fields, value, onChange, onlyRequired }: {
           case 'multiselect':
             return (
               <View key={f.key} style={{ gap: 4 }}>
-                <ChipPicker label={label} options={f.options ?? []} value={value[f.key] as any} multi={f.type === 'multiselect'} onChange={(v) => set(f.key, v)} />
+                <ChipPicker label={label} options={f.options ?? []} value={normalizeFieldValue(f, value[f.key]) as any} multi={f.type === 'multiselect'}
+                  onChange={(v) => set(f.key, f.type === 'multiselect' ? exclusivePick(f, normalizeFieldValue(f, value[f.key]) as string[] | undefined, v as string[]) : v)} />
+                {f.exclusive?.length ? <Txt sub size={12}>Pick all that apply. {f.exclusive.map((x) => `"${x}"`).join(' and ')} can't be combined with others.</Txt> : null}
                 {f.sensitive ? <Txt sub size={12}>Encrypted and only shown to signed-in members.</Txt> : null}
               </View>
             );

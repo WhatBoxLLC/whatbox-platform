@@ -122,7 +122,8 @@ export class AzureBlobPhotoStore implements PhotoStore {
       containerName: this.container(site), blobName, permissions: BlobSASPermissions.parse('r'),
       expiresOn: new Date(expiryEpoch() * 1000), protocol: 'https' as never,
     }, cred).toString();
-    return `${svc.url}/${this.container(site)}/${blobName}?${sas}`;
+    // Build from the blob client: svc.url ends in "/", and a doubled slash makes Azure reject the URL.
+    return `${svc.getContainerClient(this.container(site)).getBlobClient(blobName).url}?${sas}`;
   }
 }
 

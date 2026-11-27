@@ -47,6 +47,9 @@ export interface SiteSettings {
   publicTeasers: boolean; // public, crawlable member teasers (never on sensitive sites)
   explicitPhotosAllowed: boolean; // private photos may be marked explicit (web only)
   photoModeration: 'pre' | 'post'; // pre: hidden until approved; post: visible, reviewed after
+  // Check each new photo with WhatBox AI (adult content, contact info, QR codes). Set by WhatBox in
+  // Platform Admin. Unset means on for WhatBox's own sites and off for licensed sites, which pay per photo.
+  aiPhotoCheck?: boolean;
   membership: MembershipSettings;
   billingDescriptor: string;
   messageLimits: {
@@ -115,21 +118,31 @@ export interface Site {
 }
 
 export type SiteStatus = 'active' | 'suspended';
-export type UsageKind = 'email' | 'sms' | 'storage_mb' | 'push' | 'ai_screen';
+export type UsageKind = 'email' | 'sms' | 'storage_mb' | 'push' | 'ai_screen' | 'ai_photo';
 // WhatBox's own sites are free. Third-party sites pay a base fee plus metered usage.
 export interface SiteLicensing {
   owned: boolean;
   baseMonthlyCents: number;
   ratesCents: Partial<Record<UsageKind, number>>; // per unit, may be fractional (e.g. 0.2 per email)
 }
-export const DEFAULT_LICENSING: SiteLicensing = { owned: false, baseMonthlyCents: 9900, ratesCents: { email: 0.2, sms: 2, storage_mb: 0.05, ai_screen: 0.5 } };
+export const DEFAULT_LICENSING: SiteLicensing = { owned: false, baseMonthlyCents: 9900, ratesCents: { email: 0.2, sms: 2, storage_mb: 0.05, ai_screen: 0.5, ai_photo: 0.5 } };
 
 export interface PlatformSiteRow {
   id: string; slug: string; name: string; mode: SiteMode; status: SiteStatus; domains: string[]; ownerIds: string[];
   members: number; usage: Partial<Record<UsageKind, number>>; licensing: SiteLicensing; estimateCents: number;
+  aiPhotoCheck: boolean; // WhatBox AI checks this site's new photos
 }
 // Who changed what in the admin tools. Ids only: no member names, contact details or message text.
 export interface AuditEntry { id: string; at: string; actorId: string; actorEmail: string; siteId?: string; action: string; target?: string; detail?: string }
+
+// WhatBox AI (shared photo checks). Read from the WhatBox AI service by Platform Admin.
+export interface AiAccountUsage { account: string; checks: number; flaggedAdult: number; flaggedContact: number }
+export interface AiCallerRow {
+  id: string; name: string; keyHint: string; billable: boolean; rateCents: number; perMinute: number; enabled: boolean; createdAt: string;
+  checks: number; flaggedAdult: number; flaggedContact: number; estimateCents: number; accounts: AiAccountUsage[];
+}
+export interface AiOverview { available: boolean; message?: string; url?: string; month: string; callers: AiCallerRow[]; totalChecks: number; totalCents: number }
+export interface AiCallerPatch { name?: string; enabled?: boolean; billable?: boolean; rateCents?: number; perMinute?: number }
 
 export interface PlatformOverview { month: string; sites: PlatformSiteRow[]; owners: AdminUser[] }
 export interface NewSiteInput { slug: string; name: string; domains: string[]; mode: SiteMode; ownerIds: string[]; templateSiteId?: string; tagline?: string; audience?: string }
@@ -200,6 +213,8 @@ export interface Photo {
   status: ReviewStatus;
   url?: string; // data URI in the preview only
   blobKey?: string; // object key in the site's photo store (production)
+  aiRating?: PhotoRating; // what WhatBox AI found; the member can't mark the photo as less explicit
+  aiFlags?: string[]; // e.g. "phone number in photo"; the photo stays hidden until a moderator approves it
   tone?: [string, string]; // seeded placeholder silhouette colors
   sort: number;
   createdAt: string;

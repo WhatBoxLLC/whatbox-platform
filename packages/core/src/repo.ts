@@ -1,7 +1,7 @@
 // Storage interfaces. The API implements these on PostgreSQL (one database per site plus
 // a control database); the clickable preview implements them in memory.
 import type {
-  AdminUser, AuditEntry, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
+  AdminUser, AiCallerPatch, AiCallerRow, AiOverview, AuditEntry, PhotoRating, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
   Photo, PrivateAccess, PushToken, Report, Subscription, SubscriptionStatus, ReviewStatus, Site, UsageKind, VerificationChallenge, View,
 } from './types';
 
@@ -149,6 +149,20 @@ export interface PhotoStore {
   put(site: Site, key: string, data: Uint8Array, contentType: string): Promise<void>;
   delete(site: Site, key: string): Promise<void>;
   readUrl(site: Site, key: string): string; // short-lived signed URL
+}
+
+// WhatBox AI photo check (adult content, contact info, QR codes). The photo is not kept by the service.
+export interface PhotoCheck { rating: PhotoRating; contactKinds: string[] }
+export interface PhotoChecker {
+  check(site: Site, data: Uint8Array): Promise<PhotoCheck>;
+}
+// Platform Admin's view of the shared WhatBox AI service: every caller, usage and keys.
+export interface AiAdmin {
+  url?: string;
+  overview(month: string): Promise<Omit<AiOverview, 'available' | 'url'>>;
+  addCaller(input: { name: string; billable: boolean; rateCents?: number }): Promise<{ caller: AiCallerRow; key: string }>;
+  updateCaller(id: string, patch: AiCallerPatch): Promise<{ caller: AiCallerRow }>;
+  replaceKey(id: string): Promise<{ caller: AiCallerRow; key: string }>;
 }
 
 // Verifies an Apple or Google ID token for one site (its own client IDs) and returns the stable user id.

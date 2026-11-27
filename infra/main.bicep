@@ -2,7 +2,7 @@
 // WhatBox's own Azure account. Nothing here is tied to a subscription, so it moves unchanged.
 //
 // Deploy in two passes (the GitHub workflow does this):
-//   1. deployApps=false  -> registry, Key Vault, Postgres, Storage, Communication Services
+//   1. deployApps=false  -> registry, Key Vault, Postgres, Storage, Communication Services, Azure AI accounts
 //   2. build images into the registry, then deployApps=true -> Container Apps and jobs
 // Between the passes the workflow creates any missing per-site encryption keys directly in Key Vault
 // (infra/scripts/bootstrap-secrets.sh). They are never passed through this template.
@@ -42,6 +42,9 @@ param acsSmsFromJson string = ''
 
 @description('Dev only: email of a person to add as Platform Admin when the demo seed job runs.')
 param seedAdminEmail string = ''
+
+@description('Region for the WhatBox AI photo check accounts (Content Safety, Vision).')
+param aiLocation string = 'eastus'
 
 var prod = env == 'prod'
 var suffix = uniqueString(resourceGroup().id)
@@ -247,6 +250,28 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
+// ---------- WhatBox AI: shared photo checks for every site and app (infra/modules/ai.bicep) ----------
+
+module whatboxAi 'modules/ai.bicep' = {
+  name: 'whatbox-ai'
+  params: {
+    name: name
+    location: location
+    aiLocation: aiLocation
+    tags: tags
+    prod: prod
+    deployApps: deployApps
+    imageTag: imageTag
+    suffix: suffix
+    caeId: cae.id
+    caeDomain: cae.properties.defaultDomain
+    identityId: identity.id
+    acrServer: acr.properties.loginServer
+    kvName: kv.name
+  }
+  dependsOn: [acrPull, kvRead]
+}
+
 var registries = [ { server: acr.properties.loginServer, identity: identity.id } ]
 var kvUri = kv.properties.vaultUri
 var apiSecrets = [
@@ -257,6 +282,8 @@ var apiSecrets = [
   { name: 'paypal-json', keyVaultUrl: '${kvUri}secrets/paypal-json', identity: identity.id }
   { name: 'oauth-clients-json', keyVaultUrl: '${kvUri}secrets/oauth-clients-json', identity: identity.id }
   { name: 'expo-access-token', keyVaultUrl: '${kvUri}secrets/expo-access-token', identity: identity.id }
+  { name: 'ai-platform-key', keyVaultUrl: '${kvUri}secrets/ai-platform-key', identity: identity.id }
+  { name: 'ai-admin-key', keyVaultUrl: '${kvUri}secrets/ai-admin-key', identity: identity.id }
 ]
 var apiHost = '${name}-api.${cae.properties.defaultDomain}'
 var memberHost = '${name}-app.${cae.properties.defaultDomain}'
@@ -283,6 +310,9 @@ var apiEnv = [
   { name: 'TRUST_PROXY_HOPS', value: '1' }
   { name: 'EXPOSE_DEV_CODES', value: 'false' }
   { name: 'CLEANUP_MINUTES', value: '10' }
+  { name: 'AI_URL', value: whatboxAi.outputs.url }
+  { name: 'AI_API_KEY', secretRef: 'ai-platform-key' }
+  { name: 'AI_ADMIN_KEY', secretRef: 'ai-admin-key' }
 ]
 
 resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
@@ -447,4 +477,5 @@ output apiUrl string = 'https://${apiHost}'
 output webUrl string = 'https://${name}-web.${cae.properties.defaultDomain}'
 output memberAppUrl string = 'https://${memberHost}'
 output migrateJobName string = '${name}-migrate'
+output aiUrl string = whatboxAi.outputs.url
 output emailSender string = 'DoNotReply@${emailDomain.properties.mailFromSenderDomain}'

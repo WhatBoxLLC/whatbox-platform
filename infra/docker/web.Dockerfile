@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/member/package.json apps/member/package.json
+COPY apps/ai/package.json apps/ai/package.json
 COPY packages/core packages/core
 COPY apps/web apps/web
 RUN npm ci -w @whatbox/web -w @whatbox/core --include-workspace-root=false

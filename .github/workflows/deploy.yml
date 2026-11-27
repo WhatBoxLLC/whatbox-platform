@@ -50,7 +50,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Infrastructure (registry, vault, database, storage, email)
+      - name: Infrastructure (registry, vault, database, storage, email, WhatBox AI accounts)
         id: base
         run: |
           deployer=$(az ad sp show --id "${{ vars.AZURE_CLIENT_ID }}" --query id -o tsv)
@@ -62,17 +62,19 @@ jobs:
           echo "acr=$(jq -r .acrName.value <<<"$out")" >> "$GITHUB_OUTPUT"
           echo "kv=$(jq -r .keyVaultName.value <<<"$out")" >> "$GITHUB_OUTPUT"
           echo "api=$(jq -r .apiUrl.value <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "ai=$(jq -r .aiUrl.value <<<"$out")" >> "$GITHUB_OUTPUT"
         env:
           PG_PW: ${{ secrets.PG_ADMIN_PASSWORD }}
           PAYPAL_JSON: ${{ secrets.PAYPAL_JSON || '{}' }}
           OAUTH_JSON: ${{ secrets.OAUTH_CLIENTS_JSON || '{}' }}
           EXPO_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
 
-      - name: Site encryption keys (created in Key Vault if missing, never printed)
+      - name: Site encryption keys and WhatBox AI keys (created in Key Vault if missing, never printed)
         run: |
           # A new role assignment can take a few minutes to apply.
           for i in $(seq 1 20); do
-            infra/scripts/bootstrap-secrets.sh "${{ steps.base.outputs.kv }}" site_afterh site_hfriends site_datealittle && exit 0
+            infra/scripts/bootstrap-secrets.sh "${{ steps.base.outputs.kv }}" site_afterh site_hfriends site_datealittle \
+              && infra/scripts/bootstrap-ai-keys.sh "${{ steps.base.outputs.kv }}" && exit 0
             echo "waiting for Key Vault access…"; sleep 30
           done
           exit 1
@@ -81,10 +83,11 @@ jobs:
         run: |
           az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/api.Dockerfile -t "whatbox-api:$TAG" . &
           az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/web.Dockerfile -t "whatbox-web:$TAG" . &
+          az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/ai.Dockerfile -t "whatbox-ai:$TAG" . &
           az acr build -r "${{ steps.base.outputs.acr }}" -f infra/docker/member.Dockerfile -t "whatbox-member:$TAG" \
             --build-arg EXPO_PUBLIC_API_URL="${{ steps.base.outputs.api }}" \
             --build-arg EXPO_PUBLIC_OAUTH_JSON="${{ vars.EXPO_PUBLIC_OAUTH_JSON }}" . &
-          wait -n && wait -n && wait -n
+          wait -n && wait -n && wait -n && wait -n
 
       - name: Container apps
         run: |
@@ -127,13 +130,16 @@ jobs:
           exit 1
 
       - name: Health check
-        run: curl -sf --retry 10 --retry-delay 6 --retry-all-errors "${{ steps.base.outputs.api }}/healthz"
+        run: |
+          curl -sf --retry 10 --retry-delay 6 --retry-all-errors "${{ steps.base.outputs.api }}/healthz"
+          curl -sf --retry 10 --retry-delay 6 --retry-all-errors "${{ steps.base.outputs.ai }}/healthz"
 
       - name: Addresses
         run: |
           {
             echo "### $ENV is live"
             echo "- API: ${{ steps.base.outputs.api }}"
+            echo "- WhatBox AI (photo checks): ${{ steps.base.outputs.ai }}"
             az containerapp show -g "$RG" -n "whatbox-$ENV-web" --query properties.configuration.ingress.fqdn -o tsv | sed 's|^|- Public site: https://|'
             az containerapp show -g "$RG" -n "whatbox-$ENV-app" --query properties.configuration.ingress.fqdn -o tsv | sed 's|^|- Member app and admin: https://|'
           } >> "$GITHUB_STEP_SUMMARY"

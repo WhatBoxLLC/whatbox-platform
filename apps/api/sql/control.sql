@@ -49,3 +49,19 @@ CREATE TABLE IF NOT EXISTS usage_events (
   at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS usage_site_month_idx ON usage_events (site_id, at);
+
+-- Who changed what in the admin tools. Ids only, never member names, contacts or messages.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id          text PRIMARY KEY,
+  at          timestamptz NOT NULL,
+  actor_id    text NOT NULL,
+  actor_email text NOT NULL,
+  site_id     text,
+  action      text NOT NULL,
+  target      text,
+  detail      text
+);
+CREATE INDEX IF NOT EXISTS audit_site_at_idx ON audit_log (site_id, at DESC);
+CREATE INDEX IF NOT EXISTS audit_at_idx ON audit_log (at DESC);
+
+ALTER TABLE rate_limits ADD COLUMN IF NOT EXISTS at timestamptz NOT NULL DEFAULT now();

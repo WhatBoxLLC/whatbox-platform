@@ -173,5 +173,14 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   const ov = await pa.platform();
   assert.ok((ov.sites.find((x) => x.slug === 'afterh')!.usage.email ?? 0) > 0);
 
+  // Hardening: headers, audit trail, cleanup job
+  const hr = await fetch(base + '/v1/site', { headers: { 'X-Site': 'afterh' } });
+  assert.equal(hr.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(hr.headers.get('cache-control'), 'no-store');
+  assert.equal(hr.headers.get('x-powered-by'), null);
+  const trail = await pa.audit();
+  assert.ok(trail.some((e) => e.action === 'platform.site_suspend'));
+  assert.ok(!(await admin.audit()).some((e) => e.siteId === smokeSite!.id), 'owners only see their own sites');
+
   console.log('smoke ok:', { members: stats.members, openModeration: stats.openModeration, searchTotal: res.total });
 })().catch((e) => { console.error('smoke FAILED', e); process.exit(1); });

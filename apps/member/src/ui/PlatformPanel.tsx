@@ -5,6 +5,7 @@ import {
 } from '@whatbox/core';
 import { useCallback, useEffect, useState } from 'react';
 import { View } from 'react-native';
+import { AuditList } from './AuditList';
 import { Badge, Btn, Card, Check, ChipPicker, ErrorText, Field, H, Loading, Notice, Toggle, Txt, useTheme } from './kit';
 
 const USAGE: { kind: UsageKind; label: string; unit: string }[] = [
@@ -58,6 +59,8 @@ export function PlatformPanel({ api, onSitesChanged }: { api: AdminApi; onSitesC
 
       <H size={20} level={2}>Owners</H>
       <Owners api={api} ov={ov} run={run} />
+
+      <AuditList api={api} siteNames={Object.fromEntries(ov.sites.map((s) => [s.id, s.name]))} refreshKey={ov} />
     </View>
   );
 }

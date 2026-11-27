@@ -165,6 +165,7 @@ export class AdminController {
     return { admin: { id: ad.id, email: ad.email, name: ad.name, role: ad.role }, sites: await this.p.adminSites(ad) };
   }
   @Get('sites/:site') async site(@Headers('authorization') a: string, @Param('site') s: string) { return this.p.adminSite(await this.admin(a), s); }
+  @Get('audit') async audit(@Headers('authorization') a: string, @Query('site') s?: string) { return this.p.adminAudit(await this.admin(a), s || undefined); }
   // WhatBox platform admins
   @Get('platform') async platform(@Headers('authorization') a: string, @Query('month') m?: string) { return this.p.platformOverview(await this.admin(a), m); }
   @Post('platform/sites') async newSite(@Headers('authorization') a: string, @Body() b: any) { return this.p.platformCreateSite(await this.admin(a), b ?? {}); }

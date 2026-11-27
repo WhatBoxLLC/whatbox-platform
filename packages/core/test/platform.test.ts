@@ -424,3 +424,67 @@ test('platform admin: create a site, assign an owner, suspend, usage and estimat
   assert.deepEqual((await pa.platform()).sites.find((x) => x.id === site.id)!.ownerIds, []);
   await assert.rejects(pat.me(), (e: ApiError) => e.status === 401);
 });
+
+test('audit log records admin changes, scoped to the sites an owner manages', async () => {
+  const mp = await createMemoryPlatform();
+  const owner = await adminSignIn(mp, DEMO_OWNER_EMAIL);
+  await owner.updateSite('site_afterh', { settings: { membership: { paywallEnabled: true } } });
+  const pa = await adminSignIn(mp, 'admin@whatbox.test');
+  const other = await pa.createSite({ slug: 'other', name: 'Other', domains: ['other.example'], mode: 'standard', ownerIds: [] });
+  await pa.platformUpdateSite(other.id, { status: 'suspended' });
+
+  const mine = await owner.audit('site_afterh');
+  assert.ok(mine.some((e) => e.action === 'site.update' && e.detail?.includes('paywallEnabled=true') && e.actorEmail === DEMO_OWNER_EMAIL));
+  const ownerAll = await owner.audit();
+  assert.ok(!ownerAll.some((e) => e.siteId === other.id), 'owners never see other sites');
+  await assert.rejects(owner.audit(other.id), (e: ApiError) => e.status === 403);
+  const all = await pa.audit();
+  assert.ok(all.some((e) => e.action === 'platform.site_suspend' && e.siteId === other.id));
+  assert.ok(all.some((e) => e.action === 'platform.site_create'));
+});
+
+test('isolation: ids and admin rights never cross sites', async () => {
+  const mp = await createMemoryPlatform();
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const st = await a.startVerification('email', DEMO_MEMBER_EMAIL);
+  a.setToken((await a.verify(st.challengeId, st.devCode!)).token);
+  const afterhPerson = (await a.search({ withinMiles: 100, pageSize: 5 })).people[0];
+
+  const h = createLocalMemberApi(mp.platform, 'hfriends', 'web');
+  const st2 = await h.startVerification('email', 'someone.new@example.com');
+  h.setToken((await h.verify(st2.challengeId, st2.devCode!)).token);
+  await h.updateMe({ displayName: 'Sam', birthYear: 1990, gender: 'man', seeking: ['woman'], postal: '80202' });
+  await assert.rejects(h.profile(afterhPerson.id), (e: ApiError) => e.status === 404);
+  await assert.rejects(h.like(afterhPerson.id, true), (e: ApiError) => e.status === 404);
+
+  const pa = await adminSignIn(mp, 'admin@whatbox.test');
+  const pat = await pa.saveOwner({ email: 'pat@example.com', name: 'Pat', siteIds: ['site_hfriends'] });
+  const patApi = await adminSignIn(mp, pat.email);
+  await assert.rejects(patApi.members('site_afterh', {}), (e: ApiError) => e.status === 403);
+  await assert.rejects(patApi.setMemberTier('site_afterh', afterhPerson.id, 'vip'), (e: ApiError) => e.status === 403);
+  await assert.rejects(patApi.setMemberTier('site_hfriends', afterhPerson.id, 'vip'), (e: ApiError) => e.status === 404);
+});
+
+test('cleanup: cancelled memberships lapse at period end; expired sessions go away', async () => {
+  const { StubGateway } = await import('../src/index');
+  let now = new Date('2026-12-01T12:00:00Z');
+  const mp = await createMemoryPlatform({ allowSelfServeTier: false, payments: { stub: new StubGateway() }, clock: { now: () => now } });
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const st = await api.startVerification('email', DEMO_MEMBER_EMAIL);
+  api.setToken((await api.verify(st.challengeId, st.devCode!)).token);
+  const co = await api.checkout('paid', { returnUrl: 'r', cancelUrl: 'c' });
+  const ref = new URL(co.checkoutUrl, 'https://x').searchParams.get('ref')!;
+  const site = (await mp.control.listSites()).find((s) => s.slug === 'afterh')!;
+  await mp.platform.handlePaymentWebhook(site, 'stub', {}, { ref, status: 'active', periodEnd: '2026-12-20T00:00:00Z' }, '');
+  await api.cancelSubscription();
+  assert.equal((await api.me()).member.tier, 'paid');
+  await mp.platform.cleanup();
+  assert.equal((await api.me()).member.tier, 'paid', 'still inside the paid period');
+  now = new Date('2026-12-21T00:00:00Z');
+  await mp.platform.cleanup();
+  assert.equal((await api.me()).member.tier, 'free');
+  assert.equal((await api.me()).subscription, undefined);
+  now = new Date('2027-06-01T00:00:00Z'); // sessions last well under six months
+  await mp.platform.cleanup();
+  await assert.rejects(api.me(), (e: ApiError) => e.status === 401);
+});

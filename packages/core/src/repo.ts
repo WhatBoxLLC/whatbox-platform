@@ -1,7 +1,7 @@
 // Storage interfaces. The API implements these on PostgreSQL (one database per site plus
 // a control database); the clickable preview implements them in memory.
 import type {
-  AdminUser, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
+  AdminUser, AuditEntry, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
   Photo, PrivateAccess, PushToken, Report, Subscription, SubscriptionStatus, ReviewStatus, Site, UsageKind, VerificationChallenge, View,
 } from './types';
 
@@ -29,6 +29,10 @@ export interface ControlRepo {
   hit(key: string, windowSeconds: number, nowIso: string): Promise<number>;
   // Metering for licensing: counts only, no content.
   recordUsage(siteId: string, kind: UsageKind, qty: number, atIso: string): Promise<void>;
+  audit(e: AuditEntry): Promise<void>;
+  listAudit(opts: { siteIds?: string[]; limit: number }): Promise<AuditEntry[]>; // siteIds undefined = everything
+  // Deletes expired admin sessions and codes, and old rate-limit windows.
+  cleanup(nowIso: string): Promise<void>;
   usageSummary(sinceIso: string, untilIso?: string): Promise<{ siteId: string; kind: UsageKind; qty: number }[]>;
 }
 // Creates a new site's own database and schema. The preview's in-memory store needs nothing.
@@ -117,7 +121,10 @@ export interface SiteRepo {
   saveSubscription(s: Subscription): Promise<void>;
   getSubscription(id: string): Promise<Subscription | null>;
   findSubscriptionByRef(provider: string, ref: string): Promise<Subscription | null>;
-  claimWebhookEvent(provider: string, eventId: string): Promise<boolean>; // false if already applied
+  claimWebhookEvent(provider: string, eventId: string): Promise<boolean>;
+  // Deletes expired sessions and codes and abandoned checkouts; marks cancelled subscriptions
+  // whose paid period has ended as expired. Returns those members so their tier can be recomputed.
+  cleanup(nowIso: string): Promise<{ lapsedMemberIds: string[] }>; // false if already applied
   listSubscriptions(memberId: string): Promise<Subscription[]>;
 
   // push notification tokens

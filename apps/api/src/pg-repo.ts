@@ -2,7 +2,7 @@
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
   AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Favorite, Like, Pass, Member, MemberQuery, MemberSession,
-  Message, ModerationItem, Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, SiteRepo, Subscription, UsageKind, VerificationChallenge, View,
+  Message, ModerationItem, Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, SiteRepo, Subscription, UsageKind, AuditEntry, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
 
@@ -60,6 +60,26 @@ export class PgControlRepo implements ControlRepo {
       [key, win],
     );
     return r.rows[0].n as number;
+  }
+  async audit(e: AuditEntry) {
+    await this.db.query(
+      'INSERT INTO audit_log (id, at, actor_id, actor_email, site_id, action, target, detail) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [e.id, e.at, e.actorId, e.actorEmail, e.siteId ?? null, e.action, e.target ?? null, e.detail ?? null],
+    );
+  }
+  async listAudit(o: { siteIds?: string[]; limit: number }) {
+    const r = o.siteIds
+      ? await this.db.query('SELECT * FROM audit_log WHERE site_id = ANY($1) ORDER BY at DESC LIMIT $2', [o.siteIds, o.limit])
+      : await this.db.query('SELECT * FROM audit_log ORDER BY at DESC LIMIT $1', [o.limit]);
+    return r.rows.map((x: any): AuditEntry => ({
+      id: x.id, at: new Date(x.at).toISOString(), actorId: x.actor_id, actorEmail: x.actor_email,
+      siteId: x.site_id ?? undefined, action: x.action, target: x.target ?? undefined, detail: x.detail ?? undefined,
+    }));
+  }
+  async cleanup(now: string) {
+    await this.db.query('DELETE FROM admin_sessions WHERE expires_at < $1', [now]);
+    await this.db.query('DELETE FROM admin_challenges WHERE expires_at < $1', [now]);
+    await this.db.query("DELETE FROM rate_limits WHERE at < $1::timestamptz - interval '2 days'", [now]);
   }
   async recordUsage(siteId: string, kind: UsageKind, qty: number, at: string) {
     await this.db.query('INSERT INTO usage_events (site_id, kind, qty, at) VALUES ($1,$2,$3,$4)', [siteId, kind, qty, at]);
@@ -212,6 +232,16 @@ export class PgSiteRepo implements SiteRepo {
     return (await this.db.query('SELECT * FROM subscriptions WHERE member_id=$1 ORDER BY created_at', [memberId])).rows.map(subRow);
   }
   // True the first time an event id is seen.
+  async cleanup(now: string) {
+    await this.db.query('DELETE FROM sessions WHERE expires_at < $1', [now]);
+    await this.db.query('DELETE FROM challenges WHERE expires_at < $1', [now]);
+    await this.db.query("DELETE FROM subscriptions WHERE status='pending' AND created_at < $1::timestamptz - interval '2 days'", [now]);
+    await this.db.query("DELETE FROM webhook_events WHERE at < $1::timestamptz - interval '90 days'", [now]);
+    const r = await this.db.query(
+      "UPDATE subscriptions SET status='expired', updated_at=$1 WHERE status='cancelled' AND period_end < $1 RETURNING member_id", [now],
+    );
+    return { lapsedMemberIds: [...new Set(r.rows.map((x: any) => x.member_id as string))] };
+  }
   async claimWebhookEvent(provider: string, eventId: string) {
     const r = await this.db.query('INSERT INTO webhook_events (provider, event_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [provider, eventId]);
     return r.rowCount === 1;

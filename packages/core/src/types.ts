@@ -124,6 +124,9 @@ export interface PlatformSiteRow {
   id: string; slug: string; name: string; mode: SiteMode; status: SiteStatus; domains: string[]; ownerIds: string[];
   members: number; usage: Partial<Record<UsageKind, number>>; licensing: SiteLicensing; estimateCents: number;
 }
+// Who changed what in the admin tools. Ids only: no member names, contact details or message text.
+export interface AuditEntry { id: string; at: string; actorId: string; actorEmail: string; siteId?: string; action: string; target?: string; detail?: string }
+
 export interface PlatformOverview { month: string; sites: PlatformSiteRow[]; owners: AdminUser[] }
 export interface NewSiteInput { slug: string; name: string; domains: string[]; mode: SiteMode; ownerIds: string[]; templateSiteId?: string; tagline?: string; audience?: string }
 

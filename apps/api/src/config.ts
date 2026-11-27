@@ -11,6 +11,8 @@ export const config = {
   siteKeysJson: process.env.SITE_KEYS_JSON ?? '', // {"site_afterh":"<64 hex chars>", ...}
   exposeDevCodes: process.env.EXPOSE_DEV_CODES === 'true',
   rateLimitScale: Number(process.env.RATE_LIMIT_SCALE ?? 1), // dev/test only
+  trustProxyHops: Number(process.env.TRUST_PROXY_HOPS ?? 1),
+  cleanupMinutes: Number(process.env.CLEANUP_MINUTES ?? 10), // 0 turns the in-process job off
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:8081,http://localhost:3000').split(','),
   notifier: process.env.NOTIFIER ?? 'console', // console | acs (Azure Communication Services)
   acsConnectionString: process.env.ACS_CONNECTION_STRING ?? '',

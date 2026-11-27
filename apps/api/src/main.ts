@@ -5,6 +5,7 @@ import { buildModule, ErrorFilter } from './app';
 import { config } from './config';
 import { createPlatform } from './db';
 import { LocalPhotoStore } from './photos';
+import { startCleanup } from './cleanup';
 
 async function main() {
   const { platform, photos, events } = createPlatform();
@@ -13,8 +14,23 @@ async function main() {
   app.useGlobalFilters(new ErrorFilter());
   app.enableCors({ origin: config.corsOrigins, allowedHeaders: ['Content-Type', 'Authorization', 'X-Site', 'X-Client-Platform'] });
   const http = app.getHttpAdapter().getInstance() as import('express').Express;
-  http.set('trust proxy', true);
+  // Only the load balancer's hop is trusted, so clients can't fake their IP for rate limits.
+  http.set('trust proxy', config.trustProxyHops);
   http.disable('x-powered-by');
+  http.use((req, res, next) => {
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Cross-Origin-Resource-Policy': 'same-site',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+      'Content-Security-Policy': req.path.startsWith('/dev/') ? "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'" : "default-src 'none'; frame-ancestors 'none'",
+    });
+    if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    // Member data must never sit in a shared cache.
+    if (req.path.startsWith('/v1/')) res.set('Cache-Control', 'no-store');
+    next();
+  });
   // Live events (server-sent events). Clients connect with their normal session header.
   http.get('/v1/events', async (req, res) => {
     let site, ctx;
@@ -65,6 +81,7 @@ async function main() {
 body:JSON.stringify({ref:${js(q.ref)},sub:${js(q.sub)},status:'active',periodEnd:new Date(Date.now()+30*864e5).toISOString()})});location.href=${js(back)};}</script>`);
     });
   }
+  if (config.cleanupMinutes > 0) startCleanup(platform, config.cleanupMinutes);
   await app.listen(config.port);
   console.log(`WhatBox API listening on :${config.port}`);
 }

@@ -11,6 +11,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { adminApi, IS_PREVIEW } from '../../lib/backend';
 import { storage } from '../../lib/storage';
 import { PlatformPanel } from '../../ui/PlatformPanel';
+import { AuditList } from '../../ui/AuditList';
 import {
   Avatar, Badge, Btn, Card, Check, Chip, ChipPicker, ErrorText, Field, fonts, H, Icon, Loading, Notice, PhotoTile,
   relTime, Segmented, ThemeOverrideProvider, Toggle, Txt, useTheme, useWide, type IconName,
@@ -191,7 +192,7 @@ function Dashboard({ api, me, reload, onOut }: { api: AdminApi; me: Awaited<Retu
           </View>
           {!site || !siteId ? <Loading /> : (
             <>
-              {tab === 'overview' ? <Overview stats={stats} site={site} go={setTab} /> : null}
+              {tab === 'overview' ? <><Overview stats={stats} site={site} go={setTab} /><AuditList api={api} siteId={siteId} refreshKey={site} /></> : null}
               {tab === 'moderation' ? <Moderation api={api} siteId={siteId} onChange={reloadStats} /> : null}
               {tab === 'members' ? <Members api={api} siteId={siteId} /> : null}
               {tab === 'fields' ? <Fields api={api} site={site} onSite={setSite} /> : null}

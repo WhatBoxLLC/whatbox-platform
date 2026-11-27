@@ -1120,6 +1120,8 @@ export class Platform {
     await this.deps.control.deleteAdminChallenge(challengeId);
     const token = 'adm.' + randomId();
     await this.deps.control.saveAdminSession({ token: await this.adminSessionKey(token), adminId: c.adminId, expiresAt: new Date(this.now().getTime() + SESSION_TTL_MS).toISOString() });
+    const who = await this.deps.control.getAdmin(c.adminId);
+    if (who) await this.audit(who, 'admin.sign_in');
     this.changed();
     return { token };
   }
@@ -1192,6 +1194,7 @@ export class Platform {
       if (m) await repo.saveMember({ ...m, about: '' });
     }
     await repo.saveModeration({ ...item, status, decidedAt: this.iso(), decidedBy: admin.email });
+    await this.audit(admin, `moderation.${decision}`, site.id, item.memberId, item.kind);
     this.changed();
     return this.adminModeration(admin, siteId, 'pending');
   }
@@ -1219,8 +1222,42 @@ export class Platform {
     const m = await repo.getMember(memberId);
     if (!m) throw new RuleError('not_found', 'Member not found.', 404);
     await repo.saveMember({ ...m, status });
+    await this.audit(admin, 'member.status', site.id, memberId, status);
     this.changed();
     return { ok: true };
+  }
+
+  // ---------------- Audit log ----------------
+
+  private async audit(admin: AdminUser, action: string, siteId?: string, target?: string, detail?: string) {
+    try {
+      await this.deps.control.audit({ id: randomId('aud_'), at: this.iso(), actorId: admin.id, actorEmail: admin.email, siteId, action, target, detail: detail?.slice(0, 300) });
+    } catch (e) { console.error('[audit] write failed', (e as Error).message); }
+  }
+
+  async adminAudit(admin: AdminUser, siteId?: string) {
+    if (siteId) await this.adminSite(admin, siteId);
+    const siteIds = siteId ? [siteId] : admin.role === 'platform' ? undefined : admin.siteIds;
+    return this.deps.control.listAudit({ siteIds, limit: 100 });
+  }
+
+  // ---------------- Housekeeping ----------------
+
+  // Run every few minutes by one API instance (or a scheduled job). Safe to run repeatedly.
+  async cleanup() {
+    const now = this.iso();
+    await this.deps.control.cleanup(now);
+    let lapsed = 0;
+    for (const site of await this.deps.control.listSites()) {
+      try {
+        const repo = await this.repo(site);
+        const r = await repo.cleanup(now);
+        for (const id of r.lapsedMemberIds) await this.recomputeTier(site, repo, id);
+        lapsed += r.lapsedMemberIds.length;
+      } catch (e) { console.error('[cleanup]', site.id, (e as Error).message); }
+    }
+    if (lapsed) this.changed();
+    return { lapsed };
   }
 
   // ---------------- Platform Admin (WhatBox staff only) ----------------
@@ -1310,6 +1347,7 @@ export class Platform {
     };
     await this.deps.provisioner?.provision(site);
     await this.deps.control.saveSite(site);
+    await this.audit(admin, 'platform.site_create', site.id, slug, `${mode}; ${domains.join(', ')}`);
     for (const oid of ownerIds) {
       const a = admins.find((x) => x.id === oid)!;
       if (!a.siteIds.includes(id)) await this.deps.control.saveAdmin({ ...a, siteIds: [...a.siteIds, id] });
@@ -1344,6 +1382,7 @@ export class Platform {
       site.licensing = { owned: patch.licensing.owned ?? cur.owned, baseMonthlyCents: Math.round(base), ratesCents: rates };
     }
     await this.deps.control.saveSite(site);
+    await this.audit(admin, patch.status ? `platform.site_${patch.status === 'suspended' ? 'suspend' : 'resume'}` : 'platform.site_update', site.id, undefined, describePatch(patch));
     this.changed();
     return site;
   }
@@ -1368,6 +1407,7 @@ export class Platform {
       a = { id: randomId('adm_'), email, name, role: 'owner', siteIds };
     }
     await this.deps.control.saveAdmin(a);
+    await this.audit(admin, input.id ? 'platform.owner_update' : 'platform.owner_create', undefined, a.id, `${a.email}: ${siteIds.join(', ') || 'no sites'}`);
     // Keep each site's owner list in step.
     for (const site of sites) {
       const has = site.ownerIds.includes(a.id), should = siteIds.includes(site.id);
@@ -1386,6 +1426,7 @@ export class Platform {
       if (site.ownerIds.includes(a.id)) await this.deps.control.saveSite({ ...site, ownerIds: site.ownerIds.filter((x) => x !== a.id) });
     }
     await this.deps.control.deleteAdmin(a.id);
+    await this.audit(admin, 'platform.owner_delete', undefined, a.id, a.email);
     this.changed();
     return { ok: true };
   }
@@ -1399,6 +1440,7 @@ export class Platform {
     if (!m) throw new RuleError('not_found', 'Member not found.', 404);
     await repo.saveMember({ ...m, compTier: tier === 'free' ? undefined : tier });
     await this.recomputeTier(site, repo, memberId);
+    await this.audit(admin, 'member.comp_tier', site.id, memberId, tier);
     this.changed();
     return { ok: true };
   }
@@ -1428,6 +1470,7 @@ export class Platform {
       }
     }
     await this.deps.control.saveSite(site);
+    await this.audit(admin, 'site.update', site.id, undefined, describePatch(patch));
     this.changed();
     return site;
   }
@@ -1442,6 +1485,7 @@ export class Platform {
     if (i >= 0) site.fields[i] = def;
     else site.fields.push({ ...def, order: def.order ?? site.fields.length + 1 });
     await this.deps.control.saveSite(site);
+    await this.audit(admin, 'field.save', site.id, def.key);
     this.changed();
     return site;
   }
@@ -1450,6 +1494,7 @@ export class Platform {
     const site = await this.adminSite(admin, siteId);
     site.fields = site.fields.filter((f) => f.key !== key);
     await this.deps.control.saveSite(site);
+    await this.audit(admin, 'field.delete', site.id, key);
     this.changed();
     return site;
   }
@@ -1464,6 +1509,7 @@ export class Platform {
     if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(page.slug)) throw new RuleError('bad_slug', 'Use lower case letters, digits and dashes.');
     const repo = await this.repo(site);
     await repo.savePage({ ...page, updatedAt: this.iso() });
+    await this.audit(admin, 'page.save', site.id, page.slug);
     this.changed();
     return repo.listPages();
   }
@@ -1472,9 +1518,21 @@ export class Platform {
     const site = await this.adminSite(admin, siteId);
     const repo = await this.repo(site);
     await repo.deletePage(slug);
+    await this.audit(admin, 'page.delete', site.id, slug);
     this.changed();
     return repo.listPages();
   }
+}
+
+// "settings.paywallEnabled=true, theme.accent" style summary of what an admin changed.
+function describePatch(patch: object): string {
+  const out: string[] = [];
+  const walk = (o: unknown, path: string) => {
+    if (o && typeof o === 'object' && !Array.isArray(o)) for (const [k, v] of Object.entries(o)) walk(v, path ? `${path}.${k}` : k);
+    else out.push(typeof o === 'boolean' || typeof o === 'number' ? `${path}=${o}` : path);
+  };
+  walk(patch, '');
+  return out.join(', ');
 }
 
 export interface MembershipPatch {

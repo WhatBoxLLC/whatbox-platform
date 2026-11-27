@@ -9,6 +9,7 @@
     "seed": "tsx scripts/seed.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "smoke": "tsx scripts/smoke.ts",
+    "cleanup": "tsx scripts/cleanup.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

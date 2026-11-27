@@ -6,7 +6,7 @@ import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
   ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, MemberEvent, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
-  SearchResult, Site, SiteMode, SiteStats, Tier, AdminUser, NewSiteInput, PlatformOverview,
+  SearchResult, Site, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview,
 } from './types';
 
 export class ApiError extends Error {
@@ -80,6 +80,8 @@ export interface AdminApi {
   pages(siteId: string): Promise<ContentPage[]>;
   savePage(siteId: string, page: ContentPage): Promise<ContentPage[]>;
   deletePage(siteId: string, slug: string): Promise<ContentPage[]>;
+
+  audit(siteId?: string): Promise<AuditEntry[]>;
 
   // WhatBox platform admins only
   platform(month?: string): Promise<PlatformOverview>;
@@ -173,6 +175,7 @@ export function createLocalAdminApi(platform: Platform): AdminApi {
     members: (s, o) => wrap(async () => platform.adminMembers(await admin(), s, o)),
     setMemberStatus: (s, m, st) => wrap(async () => platform.adminSetMemberStatus(await admin(), s, m, st)),
     setMemberTier: (s, m, t) => wrap(async () => platform.adminSetMemberTier(await admin(), s, m, t)),
+    audit: (siteId) => wrap(async () => platform.adminAudit(await admin(), siteId)),
     platform: (month) => wrap(async () => platform.platformOverview(await admin(), month)),
     createSite: (input) => wrap(async () => platform.platformCreateSite(await admin(), input)),
     platformUpdateSite: (id, patch) => wrap(async () => platform.platformUpdateSite(await admin(), id, patch)),

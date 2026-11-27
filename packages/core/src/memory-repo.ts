@@ -2,7 +2,7 @@
 // snapshotted to localStorage. Each site gets its own MemorySiteRepo instance, mirroring
 // the one-database-per-site layout of production.
 import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
-import type { UsageKind,
+import type { UsageKind, AuditEntry,
   AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
   PrivateAccess, PushToken, Report, Subscription, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
@@ -47,7 +47,7 @@ export class MemoryControlRepo implements ControlRepo {
   async getAdminSession(token: string) { return clone(this.sessions.find((s) => s.token === token) ?? null); }
   async deleteAdminSession(token: string) { this.sessions = this.sessions.filter((s) => s.token !== token); }
   private challenges = new Map<string, AdminChallenge>();
-  private counters = new Map<string, { window: number; n: number }>();
+  private counters = new Map<string, { window: number; n: number; at: string }>();
   async saveAdminChallenge(c: AdminChallenge) { this.challenges.set(c.id, clone(c)); }
   async getAdminChallenge(id: string) { return clone(this.challenges.get(id) ?? null); }
   async deleteAdminChallenge(id: string) { this.challenges.delete(id); }
@@ -67,8 +67,19 @@ export class MemoryControlRepo implements ControlRepo {
     const window = Math.floor(Date.parse(nowIso) / 1000 / windowSeconds);
     const c = this.counters.get(key);
     const n = c && c.window === window ? c.n + 1 : 1;
-    this.counters.set(key, { window, n });
+    this.counters.set(key, { window, n, at: nowIso });
     return n;
+  }
+  auditLog: AuditEntry[] = [];
+  async audit(e: AuditEntry) { this.auditLog.push(clone(e)); if (this.auditLog.length > 5000) this.auditLog.shift(); }
+  async listAudit(o: { siteIds?: string[]; limit: number }) {
+    return clone(this.auditLog.filter((e) => !o.siteIds || (e.siteId && o.siteIds.includes(e.siteId))).slice(-o.limit).reverse());
+  }
+  async cleanup(now: string) {
+    this.sessions = this.sessions.filter((s) => s.expiresAt > now);
+    for (const [k, c] of this.challenges) if (c.expiresAt < now) this.challenges.delete(k);
+    const cutoff = new Date(Date.parse(now) - 2 * 86400e3).toISOString();
+    for (const [k, c] of this.counters) if (c.at < cutoff) this.counters.delete(k);
   }
 }
 
@@ -266,6 +277,18 @@ export class MemorySiteRepo implements SiteRepo {
   }
   async findSubscriptionByRef(provider: string, ref: string) {
     return clone((this.d.subscriptions ?? []).find((s) => s.provider === provider && s.providerRef === ref) ?? null);
+  }
+  async cleanup(now: string) {
+    const d = this.d;
+    d.sessions = d.sessions.filter((s) => s.expiresAt > now);
+    d.challenges = d.challenges.filter((c) => c.expiresAt > now);
+    const stale = new Date(Date.parse(now) - 2 * 86400e3).toISOString();
+    d.subscriptions = (d.subscriptions ?? []).filter((s) => !(s.status === 'pending' && s.createdAt < stale));
+    const lapsed: string[] = [];
+    for (const s of d.subscriptions) {
+      if (s.status === 'cancelled' && s.currentPeriodEnd && s.currentPeriodEnd < now) { s.status = 'expired'; s.updatedAt = now; lapsed.push(s.memberId); }
+    }
+    return { lapsedMemberIds: [...new Set(lapsed)] };
   }
   async listSubscriptions(memberId: string) { return clone((this.d.subscriptions ?? []).filter((s) => s.memberId === memberId)); }
   async savePushToken(t: PushToken) {

@@ -147,6 +147,7 @@ export function createHttpAdminApi(baseUrl: string): AdminApi {
     members: (id, o) => req('GET', s(id) + '/members?search=' + encodeURIComponent(o.search ?? '') + '&page=' + (o.page ?? 1)),
     setMemberStatus: (id, m, status) => req('PATCH', s(id) + '/members/' + m, { status }),
     setMemberTier: (id, m, tier) => req('PATCH', s(id) + '/members/' + m + '/tier', { tier }),
+    audit: (siteId) => req('GET', '/v1/admin/audit' + (siteId ? '?site=' + encodeURIComponent(siteId) : '')),
     platform: (month) => req('GET', '/v1/admin/platform' + (month ? '?month=' + encodeURIComponent(month) : '')),
     createSite: (input) => req('POST', '/v1/admin/platform/sites', input),
     platformUpdateSite: (id, patch) => req('PATCH', '/v1/admin/platform/sites/' + encodeURIComponent(id), patch),

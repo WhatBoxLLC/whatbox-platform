@@ -6,7 +6,7 @@ import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
   ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, MemberEvent, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
-  SearchResult, Site, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview, AiCallerPatch, AiCallerRow, AiOverview,
+  SearchResult, Site, GeoCountry, GeoPlace, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview, AiCallerPatch, AiCallerRow, AiOverview,
 } from './types';
 
 export class ApiError extends Error {
@@ -29,6 +29,9 @@ export interface MemberApi {
 
   me(): Promise<MyProfile>;
   updateMe(patch: ProfilePatch): Promise<MyProfile>;
+  geoCountries(): Promise<GeoCountry[]>;
+  geoSearch(country: string | undefined, q: string): Promise<GeoPlace[]>;
+  geoNear(lat: number, lng: number): Promise<GeoPlace>;
   addPhoto(input: { kind: PhotoKind; rating?: PhotoRating; url?: string; tone?: [string, string] }): Promise<MyProfile>;
   updatePhoto(id: string, patch: { kind?: PhotoKind; rating?: PhotoRating }): Promise<MyProfile>;
   deletePhoto(id: string): Promise<MyProfile>;
@@ -121,6 +124,9 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     signOut: () => wrap(async () => { if (token) await platform.signOut(await site(), token); token = null; }),
     me: () => wrap(async () => platform.myProfile(await ctx())),
     updateMe: (p) => wrap(async () => platform.updateProfile(await ctx(), p)),
+    geoCountries: () => wrap(async () => { await ctx(); return platform.geoCountries(); }),
+    geoSearch: (c, q) => wrap(async () => { await ctx(); return platform.geoSearch(c, q); }),
+    geoNear: (lat, lng) => wrap(async () => { await ctx(); return platform.geoNear(lat, lng); }),
     addPhoto: (i) => wrap(async () => platform.addPhoto(await ctx(), i)),
     updatePhoto: (id, p) => wrap(async () => platform.updatePhoto(await ctx(), id, p)),
     deletePhoto: (id) => wrap(async () => platform.deletePhoto(await ctx(), id)),

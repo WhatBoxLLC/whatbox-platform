@@ -186,9 +186,18 @@ export interface Member {
   ageMax: number;
   city: string;
   region: string;
+  /** ISO 3166 two-letter code. Older records may be empty (they were all US). */
+  country?: string;
   postal: string;
+  /** City-level coordinates only. A member's exact position is never stored. */
   lat: number;
   lng: number;
+  /** Search distance they chose at sign-up; Browse starts from it. null means anywhere. */
+  maxMiles?: number | null;
+  /** Which preferences are hard limits. Preferred ones widen when Discover runs out of people. */
+  strict?: StrictPrefs;
+  /** Push notification choices; defaults in DEFAULT_NOTIFY. */
+  notify?: Partial<NotifyPrefs>;
   about: string;
   fields: Record<string, string | string[] | number | boolean>;
   status: MemberStatus;
@@ -323,7 +332,12 @@ export interface MemberCard {
   isNew: boolean; // joined recently
 }
 
+export interface StrictPrefs { seeking: boolean; age: boolean; distance: boolean }
+export const DEFAULT_STRICT: StrictPrefs = { seeking: true, age: false, distance: false };
+
 export interface DiscoverCard extends MemberCard {
+  /** Set when this person is outside a "preferred" limit, e.g. "Outside your age range". */
+  stretch?: string;
   summary: string; // first lines of "about me"
   facts: string[]; // e.g. "5′ 6″ (168 cm)", "Long-term"
   interests: string[];
@@ -422,7 +436,22 @@ export type MemberEvent =
   | { type: 'message'; fromId: string }
   | { type: 'like'; fromId: string; vip: boolean }
   | { type: 'match'; otherId: string }
-  | { type: 'access'; otherId: string; status: 'requested' | 'granted' };
+  | { type: 'access'; otherId: string; status: 'requested' | 'granted' }
+  | { type: 'photo'; photoId: string; status: 'approved' | 'rejected' };
+
+/** Which events reach a member's phone as push notifications. The in-app feed always shows everything. */
+export interface NotifyPrefs { messages: boolean; matches: boolean; likes: boolean; photos: boolean; access: boolean }
+export const DEFAULT_NOTIFY: NotifyPrefs = { messages: true, matches: true, likes: false, photos: true, access: true };
+export function wantsPush(prefs: Partial<NotifyPrefs> | undefined, ev: MemberEvent): boolean {
+  const p = { ...DEFAULT_NOTIFY, ...prefs };
+  switch (ev.type) {
+    case 'message': return p.messages;
+    case 'match': return p.matches;
+    case 'like': return p.likes;
+    case 'photo': return p.photos;
+    case 'access': return p.access;
+  }
+}
 
 export interface PushToken { memberId: string; token: string; platform: 'ios' | 'android' | 'web'; at: string }
 
@@ -489,3 +518,16 @@ export interface ModerationView extends ModerationItem {
   photo?: PhotoView;
   messageBody?: string;
 }
+
+// ---------- Places (worldwide) ----------
+export interface GeoPlace { id: string; name: string; region: string; country: string; lat: number; lng: number; postal?: string }
+export interface GeoCountry { code: string; name: string; postal: boolean; units: Units }
+/** Where members say they live. Precise enough for distance, never an address. */
+export interface GeoProvider {
+  countries(): Promise<GeoCountry[]>;
+  postal(country: string, postal: string): Promise<GeoPlace | null>;
+  search(country: string | undefined, q: string, limit?: number): Promise<GeoPlace[]>;
+  place(id: string): Promise<GeoPlace | null>;
+  nearest(lat: number, lng: number): Promise<GeoPlace | null>;
+}
+export interface LocationInput { country: string; postal?: string; placeId?: string; lat?: number; lng?: number }

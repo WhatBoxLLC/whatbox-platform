@@ -207,7 +207,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
     const m: Member = {
       id: `m_${site.slug}_${i + 1}`, displayName: name, verifiedAt: t(60 * 24 * (20 + i)), profileComplete: true,
       birthYear: year - age, gender, seeking, ageMin: Math.max(18, age - 8), ageMax: age + 8,
-      city: loc.city, region: loc.region, postal, lat: loc.lat + (r() - 0.5) * 0.02, lng: loc.lng + (r() - 0.5) * 0.02,
+      city: loc.city, region: loc.region, country: 'US', postal, lat: loc.lat + (r() - 0.5) * 0.02, lng: loc.lng + (r() - 0.5) * 0.02,
       about: `${LINES[lineIdx]} ${pick(r, MORE)} ${pick(r, MORE)}`,
       fields, status: 'active', tier: tierRoll(r()), hideExplicit: true,
       createdAt: t(60 * 24 * (3 + Math.floor(r() * 300))),
@@ -238,7 +238,7 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
   const demo: Member = {
     id: `m_${site.slug}_demo`, displayName: 'Alex', verifiedAt: t(60 * 24 * 10), profileComplete: true,
     birthYear: year - 38, gender: 'man', seeking: ['woman'], ageMin: 30, ageMax: 45,
-    city: demoLoc.city, region: demoLoc.region, postal: '80202', lat: demoLoc.lat, lng: demoLoc.lng,
+    city: demoLoc.city, region: demoLoc.region, country: 'US', postal: '80202', lat: demoLoc.lat, lng: demoLoc.lng,
     about: 'Denver transplant, weekend cyclist, and the friend who always brings snacks. Looking for something steady and fun.',
     fields: {}, status: 'active', tier: 'free', hideExplicit: true,
     createdAt: t(60 * 24 * 10), lastActiveAt: t(1),

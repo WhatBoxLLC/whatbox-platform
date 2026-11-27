@@ -591,3 +591,53 @@ test('WhatBox AI: an outage never blocks uploads; sites can turn checks off', as
   await t.add({ kind: 'public', file });
   assert.equal(t.calls(), before);
 });
+
+test('worldwide location: city search, postal, device position snapped to a town', async () => {
+  const mp = await createMemoryPlatform();
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await a.startVerification('email', 'world.member@example.com');
+  a.setToken((await a.verify(s.challengeId, s.devCode!)).token);
+  const hits = await a.geoSearch('GB', 'lon');
+  assert.equal(hits[0].name, 'London');
+  let me = await a.updateMe({ displayName: 'Sam', birthYear: 1990, gender: 'man', seeking: ['woman'], location: { country: 'GB', placeId: hits[0].id }, fields: { hsv_status: ['HSV-1'] } });
+  assert.equal(me.member.city, 'London');
+  assert.equal(me.member.country, 'GB');
+  assert.equal(me.member.unitsResolved, 'imperial');
+  assert.equal(me.member.profileComplete, true);
+  me = await a.updateMe({ location: { country: 'AU', lat: -33.86, lng: 151.21 } });
+  assert.equal(me.member.city, 'Sydney');
+  assert.equal(me.member.lat, -33.8679, 'stores the town, not the device position');
+  await assert.rejects(a.updateMe({ location: { country: 'US', postal: '00000' } }), /postal code/);
+  me = await a.updateMe({ location: { country: 'US', postal: '80202' } });
+  assert.equal(me.member.city, 'Denver');
+});
+
+test('Discover: hard limits stop, preferred limits widen and are labelled', async () => {
+  const { api } = await signIn();
+  await api.updateMe({ ageMin: 60, ageMax: 65, strict: { age: true, distance: true, seeking: true } });
+  assert.equal((await api.discover()).length, 0, 'nobody seeded is 60 to 65');
+  await api.updateMe({ strict: { age: false } });
+  const deck = await api.discover();
+  assert.ok(deck.length > 0);
+  assert.ok(deck.every((c) => c.stretch === 'Outside your age range'));
+});
+
+test('photo decisions notify the owner, and push follows their choices', async () => {
+  const { wantsPush } = await import('../src/index');
+  const mp = await createMemoryPlatform();
+  const seen: any[] = [];
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await a.startVerification('email', DEMO_MEMBER_EMAIL);
+  a.setToken((await a.verify(s.challengeId, s.devCode!)).token);
+  const me = await a.me();
+  (mp.platform as any).deps.events.subscribe('site_afterh', me.member.id, (e: any) => seen.push(e));
+  await a.addPhoto({ kind: 'public', tone: ['#111111', '#222222'] });
+  const admin = createLocalAdminApi(mp.platform);
+  const st = await admin.start(DEMO_OWNER_EMAIL);
+  admin.setToken((await admin.verify(st.challengeId, st.devCode!)).token);
+  const item = (await admin.moderation('site_afterh', 'pending')).find((i) => i.kind === 'photo' && i.memberId === me.member.id)!;
+  await admin.decide('site_afterh', item.id, 'reject');
+  assert.ok(seen.some((e) => e.type === 'photo' && e.status === 'rejected'));
+  assert.equal(wantsPush(undefined, { type: 'like', fromId: 'x', vip: false }), false, 'likes are off by default');
+  assert.equal(wantsPush({ photos: false }, { type: 'photo', photoId: 'p', status: 'approved' }), false);
+});

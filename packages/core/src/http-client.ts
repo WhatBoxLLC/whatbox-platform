@@ -84,6 +84,9 @@ export function createHttpMemberApi(baseUrl: string, siteKey: string, platform: 
     signOut: async () => { await req('POST', '/v1/auth/sign-out'); token = null; },
     me: () => req('GET', '/v1/me'),
     updateMe: (patch) => req('PATCH', '/v1/me', patch),
+    geoCountries: () => req('GET', '/v1/geo/countries'),
+    geoSearch: (country, q) => req('GET', `/v1/geo/search?${new URLSearchParams({ ...(country ? { country } : {}), q })}`),
+    geoNear: (lat, lng) => req('GET', `/v1/geo/near?lat=${lat}&lng=${lng}`),
     addPhoto: async (input) => {
       if (!input.url) return req('POST', '/v1/me/photos', input);
       // Real files go up as multipart. The web passes a data: or blob: URI; native passes a file:// URI.

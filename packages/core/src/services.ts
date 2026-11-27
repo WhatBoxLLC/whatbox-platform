@@ -2,10 +2,10 @@
 // so the rules a member hits are the same everywhere.
 import { LocalEventHub } from './events';
 import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
-import { lookupPostal } from './geo';
+import { builtinGeo, unitsForCountry } from './geo';
 import type { AiAdmin, ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoCheck, PhotoChecker, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
 import { systemClock } from './repo';
-import { DEFAULT_LICENSING, isGender } from './types';
+import { DEFAULT_LICENSING, DEFAULT_NOTIFY, DEFAULT_STRICT, isGender, type NotifyPrefs, type StrictPrefs } from './types';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
@@ -13,7 +13,7 @@ import {
 import type {
   AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, MemberEvent, Subscription,
   NewSiteInput, SiteMode, PlatformOverview, PlatformSiteRow, SiteLicensing, SiteStatus, UsageKind, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
-  ConversationView, Gender, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
+  ConversationView, Gender, GeoPlace, GeoProvider, LocationInput, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
   SiteSettings, SiteStats, SiteTheme, AiCallerPatch, AiOverview,
 } from './types';
@@ -34,6 +34,7 @@ export interface PlatformDeps {
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
   rateLimitScale?: number; // multiplies every rate limit; >1 only for local dev and test runs
+  geo?: GeoProvider; // worldwide places; the preview uses a small built-in list
   onChange?: () => void; // preview persistence hook
 }
 
@@ -51,7 +52,14 @@ export interface ProfilePatch {
   seeking?: Gender[];
   ageMin?: number;
   ageMax?: number;
+  /** @deprecated US ZIP only; use location. */
   postal?: string;
+  /** Country plus a postal code, a place picked from search, or the device's position (snapped to the nearest city). */
+  location?: LocationInput;
+  /** Default search distance in miles; null means anywhere. */
+  maxMiles?: number | null;
+  strict?: Partial<StrictPrefs>;
+  notify?: Partial<NotifyPrefs>;
   about?: string;
   fields?: Member['fields'];
   hideExplicit?: boolean;
@@ -406,11 +414,23 @@ export class Platform {
     if (patch.ageMin !== undefined) m.ageMin = Math.max(18, patch.ageMin);
     if (patch.ageMax !== undefined) m.ageMax = Math.min(99, patch.ageMax);
     if (m.ageMin > m.ageMax) [m.ageMin, m.ageMax] = [m.ageMax, m.ageMin];
-    if (patch.postal !== undefined) {
-      const loc = lookupPostal(patch.postal);
-      if (!loc) throw new RuleError('bad_postal', 'We could not find that ZIP code. Try 80202 in this prototype.');
-      Object.assign(m, { postal: patch.postal.trim(), lat: loc.lat, lng: loc.lng, city: loc.city, region: loc.region });
+    if (patch.location || (patch.postal !== undefined && patch.postal.trim() !== m.postal)) {
+      const place = await this.resolveLocation(patch.location ?? { country: 'US', postal: patch.postal });
+      const first = !m.country && !m.city;
+      Object.assign(m, { country: place.country, postal: place.postal ?? '', lat: place.lat, lng: place.lng, city: place.name, region: place.region });
+      if (first && !m.units && !patch.units) m.units = unitsForCountry(place.country);
     }
+    if (patch.strict) {
+      const cur = { ...DEFAULT_STRICT, ...m.strict };
+      for (const k of ['seeking', 'age', 'distance'] as const) if (typeof patch.strict[k] === 'boolean') cur[k] = patch.strict[k]!;
+      m.strict = cur;
+    }
+    if (patch.notify) {
+      const cur = { ...DEFAULT_NOTIFY, ...m.notify };
+      for (const k of Object.keys(DEFAULT_NOTIFY) as (keyof NotifyPrefs)[]) if (typeof patch.notify[k] === 'boolean') cur[k] = patch.notify[k]!;
+      m.notify = cur;
+    }
+    if (patch.maxMiles !== undefined) m.maxMiles = patch.maxMiles === null ? null : Math.min(500, Math.max(5, Math.round(patch.maxMiles)));
     if (patch.about !== undefined) {
       if (patch.about.length > ABOUT_MAX) throw new RuleError('about_long', `Keep it under ${ABOUT_MAX} characters.`);
       m.about = patch.about.trim();
@@ -429,7 +449,7 @@ export class Platform {
 
     if (!m.profileComplete) {
       const missing = ctx.site.fields.filter((f) => f.required && (m.fields[f.key] === undefined || m.fields[f.key] === ''));
-      if (m.displayName && m.postal && !missing.length) m.profileComplete = true;
+      if (m.displayName && m.city && !missing.length) m.profileComplete = true;
     }
     await ctx.repo.saveMember(m);
     this.changed();
@@ -579,6 +599,39 @@ export class Platform {
       incoming: inc.map((a) => row(a.viewerId, a)).filter(Boolean).sort(byUpdated) as AccessRow[],
       outgoing: out.map((a) => row(a.ownerId, a)).filter(Boolean).sort(byUpdated) as AccessRow[],
     };
+  }
+
+  // ---------------- Places ----------------
+
+  private get geo(): GeoProvider { return this.deps.geo ?? builtinGeo; }
+
+  geoCountries() { return this.geo.countries(); }
+
+  async geoSearch(country: string | undefined, q: string): Promise<GeoPlace[]> {
+    if (q.trim().length < 2) return [];
+    return this.geo.search(country ? country.toUpperCase().slice(0, 2) : undefined, q.slice(0, 60), 8);
+  }
+
+  async geoNear(lat: number, lng: number): Promise<GeoPlace> {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new RuleError('bad_location', 'That location looks wrong.');
+    const p = await this.geo.nearest(lat, lng);
+    if (!p) throw new RuleError('bad_location', 'We could not find a town near you. Search for your city instead.');
+    return p;
+  }
+
+  // Everything resolves to a known place, so we keep a city's coordinates and never a member's exact position.
+  private async resolveLocation(loc: LocationInput): Promise<GeoPlace> {
+    const country = String(loc.country ?? '').toUpperCase();
+    if (!/^[A-Z]{2}$/.test(country)) throw new RuleError('bad_location', 'Choose your country.');
+    let p: GeoPlace | null = null;
+    if (loc.placeId) p = await this.geo.place(String(loc.placeId));
+    else if (loc.postal?.trim()) {
+      p = await this.geo.postal(country, loc.postal);
+      if (!p) throw new RuleError('bad_postal', 'We could not find that postal code. Try searching for your city instead.');
+    } else if (loc.lat !== undefined && loc.lng !== undefined) p = await this.geoNear(Number(loc.lat), Number(loc.lng));
+    if (!p) throw new RuleError('bad_location', 'Choose your city.');
+    if (p.country !== country && !loc.lat) throw new RuleError('bad_location', 'That place is in a different country.');
+    return p;
   }
 
   // ---------------- Browse ----------------
@@ -781,14 +834,41 @@ export class Platform {
       ...(await ctx.repo.listLikesFrom(ctx.me.id)).map((l) => l.toId),
       ...(await ctx.repo.listPassesFrom(ctx.me.id, since)).map((p) => p.toId),
     ]);
-    const within = 100;
-    const dLat = within / 69;
-    const dLng = within / (69 * Math.max(0.2, Math.cos((ctx.me.lat * Math.PI) / 180)));
-    const rows = await ctx.repo.queryMembers({
+    // Pass 1 uses every preference. If that runs short, pass 2 relaxes only the ones the member marked
+    // "preferred", and those people are labelled so it's clear why they're showing up.
+    const strict = { ...DEFAULT_STRICT, ...ctx.me.strict };
+    const miles = ctx.me.maxMiles === undefined ? 100 : ctx.me.maxMiles;
+    const hasLoc = !!(ctx.me.lat || ctx.me.lng);
+    const box = (within: number | null) => {
+      if (!within || !hasLoc) return undefined;
+      const dLat = within / 69, dLng = within / (69 * Math.max(0.2, Math.cos((ctx.me.lat * Math.PI) / 180)));
+      return { minLat: ctx.me.lat - dLat, maxLat: ctx.me.lat + dLat, minLng: ctx.me.lng - dLng, maxLng: ctx.me.lng + dLng };
+    };
+    const inPrefs = (m: Member) => {
+      const age = year - m.birthYear;
+      return ctx.me.seeking.includes(m.gender) && age >= ctx.me.ageMin && age <= ctx.me.ageMax && (!miles || !hasLoc || milesBetween(ctx.me, m) <= miles);
+    };
+    let rows = (await ctx.repo.queryMembers({
       excludeIds: [...skip], genders: ctx.me.seeking, birthYearMin: year - ctx.me.ageMax, birthYearMax: year - ctx.me.ageMin,
-      bbox: ctx.me.lat || ctx.me.lng ? { minLat: ctx.me.lat - dLat, maxLat: ctx.me.lat + dLat, minLng: ctx.me.lng - dLng, maxLng: ctx.me.lng + dLng } : undefined,
-      onlyComplete: true,
-    });
+      bbox: box(miles), onlyComplete: true,
+    })).filter(inPrefs);
+    const stretched = new Map<string, string>();
+    if (rows.length < limit && !(strict.seeking && strict.age && strict.distance)) {
+      const more = (await ctx.repo.queryMembers({
+        excludeIds: [...skip, ...rows.map((r) => r.id)],
+        genders: strict.seeking ? ctx.me.seeking : undefined,
+        birthYearMin: strict.age ? year - ctx.me.ageMax : undefined, birthYearMax: strict.age ? year - ctx.me.ageMin : undefined,
+        bbox: strict.distance ? box(miles) : undefined, onlyComplete: true,
+      })).filter((m) => !strict.distance || !miles || !hasLoc || milesBetween(ctx.me, m) <= miles);
+      for (const m of more) {
+        const age = year - m.birthYear;
+        const why = !ctx.me.seeking.includes(m.gender) ? 'Outside who you said you want to meet'
+          : age < ctx.me.ageMin || age > ctx.me.ageMax ? 'Outside your age range'
+          : 'Farther than your distance';
+        stretched.set(m.id, why);
+      }
+      rows = rows.concat(more);
+    }
     const vipFrom = new Set((await ctx.repo.listLikesTo(ctx.me.id)).filter((l) => l.vip).map((l) => l.fromId));
     const cards = await this.cards(ctx, rows);
     const photos = await ctx.repo.listPhotosFor(rows.map((r) => r.id));
@@ -812,9 +892,11 @@ export class Platform {
           .map((p) => this.photoView(ctx, p, { owner: false })),
         vipLikedMe: vipFrom.has(m.id),
         score: this.score(ctx, m, !!c.mainPhoto, vipFrom.has(m.id)),
+        stretch: stretched.get(m.id),
       };
     });
-    out.sort((a, b) => b.score - a.score);
+    // Everyone inside the preferences first, then the stretch picks.
+    out.sort((a, b) => Number(!!a.stretch) - Number(!!b.stretch) || b.score - a.score);
     return out.slice(0, limit);
   }
 
@@ -1230,7 +1312,12 @@ export class Platform {
     const status = decision === 'approve' ? 'approved' : 'rejected';
     if (item.kind === 'photo') {
       const p = await repo.getPhoto(item.refId);
-      if (p) await repo.savePhoto({ ...p, status });
+      if (p) {
+        await repo.savePhoto({ ...p, status });
+        if (p.status !== status) {
+          try { this.deps.events?.emit(site, p.memberId, { type: 'photo', photoId: p.id, status }); } catch { /* best effort */ }
+        }
+      }
     } else if (item.kind === 'message') {
       const m = await repo.getMessage(item.refId);
       // approve releases the message to the recipient; reject keeps it held forever

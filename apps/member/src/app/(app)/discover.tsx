@@ -4,6 +4,7 @@ import type { DiscoverCard } from '@whatbox/core';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, PanResponder, Platform, Pressable, ScrollView, View } from 'react-native';
+import { awayLabel } from '../../lib/distance';
 import { useSession } from '../../lib/session';
 import { Badge, Btn, Card, H, Icon, Loading, Notice, PhotoTile, Txt, useTheme, type IconName } from '../../ui/kit';
 
@@ -109,8 +110,8 @@ export default function Discover() {
         {!deck ? <Loading /> : !top ? (
           <Card style={{ alignItems: 'center', gap: 8, paddingVertical: 40 }}>
             <Icon name="users" size={30} color={t.sub} />
-            <Txt bold>You're all caught up</Txt>
-            <Txt sub center>New people join every day. Check back soon, or widen your age range in your profile.</Txt>
+            <Txt bold>You're out of people who match your preferences</Txt>
+            <Txt sub center>New people join every day, so try again another time. To see more now, mark some preferences as "preferred" instead of hard limits in your profile.</Txt>
             <Btn size="sm" kind="secondary" label="Browse everyone" onPress={() => router.push('/browse')} />
           </Card>
         ) : (
@@ -130,6 +131,7 @@ export default function Discover() {
                       </View>
                     ) : null}
                     <View style={{ position: 'absolute', top: 22, left: 12, flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                      {top.stretch ? <Badge label={top.stretch} tone="dark" /> : null}
                       {top.vipLikedMe ? <Badge label="★ VIP liked you" tone="alert" /> : null}
                       {top.isNew ? <Badge label="New" tone="accent" /> : null}
                       {top.online ? <Badge label="Online" tone="online" /> : null}
@@ -145,7 +147,7 @@ export default function Discover() {
                 <Pressable onPress={() => router.push(`/member/${top.id}`)} accessibilityLabel={`Open ${top.displayName}'s full profile`} style={{ padding: 16, gap: 6, backgroundColor: t.surface }}>
                   <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                     <Txt bold size={22}>{top.displayName}, {top.age}</Txt>
-                    <Txt sub size={14}>{top.city}{top.miles !== null ? ` · ${top.miles} mi` : ''}</Txt>
+                    <Txt sub size={14}>{top.city}{top.miles !== null ? ` · ${awayLabel(top.miles, me!.member.unitsResolved)}` : ''}</Txt>
                   </View>
                   {top.facts.length ? <Txt size={14} color={t.accent} bold numberOfLines={1}>{top.facts.join(' · ')}</Txt> : null}
                   <Txt size={15} numberOfLines={3}>{top.summary}</Txt>

@@ -8,6 +8,17 @@ import { AuthFrame } from '../ui/AuthFrame';
 import { FieldsEditor } from '../ui/FieldsEditor';
 import { Btn, ChipPicker, ErrorText, Eyebrow, Field, H, Notice, Txt } from '../ui/kit';
 import { PhotoManager } from '../ui/PhotoManager';
+import { LocationPicker, type PickedLocation } from '../ui/LocationPicker';
+
+const DISTANCES: { label: string; value: number | null }[] = [
+  { label: '10 mi / 15 km', value: 10 }, { label: '25 mi / 40 km', value: 25 }, { label: '50 mi / 80 km', value: 50 }, { label: '100 mi / 160 km', value: 100 }, { label: 'Anywhere', value: null },
+];
+// A sensible starting range around the member's own age.
+function defaultAges(year: string): [number, number] {
+  const age = new Date().getFullYear() - Number(year);
+  if (!year || !(age >= 18 && age < 100)) return [25, 50];
+  return [Math.max(18, age - 10), Math.min(99, age + 10)];
+}
 
 export default function Onboarding() {
   const { api, me, setMe, site, signedIn } = useSession();
@@ -16,7 +27,10 @@ export default function Onboarding() {
   const [year, setYear] = useState('');
   const [gender, setGender] = useState<Gender | undefined>();
   const [seeking, setSeeking] = useState<Gender[]>([]);
-  const [postal, setPostal] = useState('');
+  const [loc, setLoc] = useState<PickedLocation | null>(null);
+  const [ageMin, setAgeMin] = useState('');
+  const [ageMax, setAgeMax] = useState('');
+  const [miles, setMiles] = useState<number | null>(50);
   const [fields, setFields] = useState<Member['fields']>(me?.member.fields ?? {});
   const [about, setAbout] = useState('');
   const [busy, setBusy] = useState(false);
@@ -47,11 +61,19 @@ export default function Onboarding() {
           <ChipPicker label="I am a" options={GENDERS.map((g) => g.label)} value={gender ? label(gender) : undefined} onChange={(v: string) => setGender(GENDERS.find((g) => g.label === v)!.value)} />
           <ChipPicker label="I want to meet" multi options={GENDERS.map((g) => g.label)} value={seeking.map(label)} onChange={(v: string[]) => setSeeking(v.map((x) => GENDERS.find((g) => g.label === x)!.value))} />
           <Txt sub size={13} style={{ marginTop: -8 }}>Pick all that apply.</Txt>
-          <Field label="ZIP code" value={postal} onChangeText={setPostal} placeholder="80202" keyboardType="number-pad" hint={IS_PREVIEW ? 'The prototype knows Denver-area ZIPs like 80202, 80301 and 80226, plus a few big cities.' : 'Used to show distance. Your exact location is never shared.'} />
+          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-end' }}>
+            <View style={{ flex: 1 }}><Field label="Ages from" value={ageMin} onChangeText={(v) => setAgeMin(v.replace(/\D/g, '').slice(0, 2))} placeholder={String(defaultAges(year)[0])} keyboardType="number-pad" /></View>
+            <View style={{ flex: 1 }}><Field label="to" value={ageMax} onChangeText={(v) => setAgeMax(v.replace(/\D/g, '').slice(0, 2))} placeholder={String(defaultAges(year)[1])} keyboardType="number-pad" /></View>
+          </View>
+          <LocationPicker onChange={setLoc} />
+          <ChipPicker label="How far away?" options={DISTANCES.map((d) => d.label)} value={DISTANCES.find((d) => d.value === miles)?.label} onChange={(l: string) => setMiles(DISTANCES.find((d) => d.label === l)!.value)} />
+          <Txt sub size={13} style={{ marginTop: -8 }}>Browse and Discover start from these choices. You can change them any time.</Txt>
           <ErrorText error={error} />
           <Btn label="Continue" size="lg" busy={busy} onPress={() => {
             if (!gender || !seeking.length) { setError('Choose who you are and who you want to meet.'); return; }
-            save(3, { displayName: name, birthYear: Number(year), gender, seeking, postal });
+            if (!loc) { setError('Tell us where you live so we can show people near you.'); return; }
+            const [dMin, dMax] = defaultAges(year);
+            save(3, { displayName: name, birthYear: Number(year), gender, seeking, location: loc.input, ageMin: Number(ageMin) || dMin, ageMax: Number(ageMax) || dMax, maxMiles: miles });
           }} />
         </View>
       ) : null}

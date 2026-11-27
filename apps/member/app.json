@@ -39,6 +39,12 @@
         {
           "color": "#22655F"
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Used once to find your town, so we can show members near you. Your exact location is never stored or shared."
+        }
       ]
     ],
     "experiments": {

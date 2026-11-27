@@ -277,3 +277,43 @@ test('code sends are rate limited per address; admin codes are single-use and at
   await admin.verify(st2.challengeId, st2.devCode!);
   await assert.rejects(admin.verify(st2.challengeId, st2.devCode!));
 });
+
+test('favorites are private bookmarks; delete account removes everything', async () => {
+  const { api, mp } = await signIn();
+  const rosa = (await api.search({ pageSize: 48 })).people.find((p) => p.displayName === 'Rosa')!;
+  await api.favorite(rosa.id, true);
+  assert.equal((await api.profile(rosa.id)).favoritedByMe, true);
+  assert.deepEqual((await api.activity('favorites')).people.map((p) => p.id), [rosa.id]);
+  await assert.rejects(api.deleteAccount('nope'), /DELETE/);
+  await api.deleteAccount('DELETE');
+  await assert.rejects(api.me());
+  // nothing about Alex is left in the site's data
+  const repo = await (mp.platform as any).deps.siteRepo('site_afterh');
+  assert.equal((await repo.listMessagesInvolving('m_afterh_demo')).length, 0);
+  assert.equal(await repo.getMember('m_afterh_demo'), null);
+  // and signing in with the same email starts a brand new account
+  const again = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const st = await again.startVerification('email', DEMO_MEMBER_EMAIL);
+  assert.equal((await again.verify(st.challengeId, st.devCode!)).isNew, true);
+});
+
+test('Apple and Google sign-in link by verified email and stay per site', async () => {
+  const idTokens = { async verify(_s: unknown, provider: string, t: string) {
+    if (t === 'bad') throw new Error('bad');
+    return { sub: provider + '-123', email: t === 'alex' ? DEMO_MEMBER_EMAIL : undefined, emailVerified: true };
+  } };
+  const mp = await createMemoryPlatform({ idTokens });
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const r = await api.signInWithProvider('google', 'alex');
+  assert.equal(r.isNew, false); // linked to Alex by email
+  api.setToken(r.token);
+  assert.equal((await api.me()).member.displayName, 'Alex');
+  const r2 = await api.signInWithProvider('google', 'no-email');
+  assert.equal(r2.token.startsWith('afterh.'), true);
+  api.setToken(r2.token);
+  assert.equal((await api.me()).member.displayName, 'Alex'); // same sub, same account
+  await assert.rejects(api.signInWithProvider('apple', 'bad'), /could not confirm/);
+  const hf = createLocalMemberApi(mp.platform, 'hfriends', 'web');
+  hf.setToken(r.token);
+  await assert.rejects(hf.me());
+});

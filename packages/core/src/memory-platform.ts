@@ -1,7 +1,7 @@
 // Builds a fully seeded, in-memory platform. Used by tests and the browser preview.
 import { DevKeyProvider, SiteCrypto } from './crypto';
 import { MemoryControlRepo, MemorySiteRepo, type ControlSnapshot, type SiteSnapshot } from './memory-repo';
-import type { Clock, Notifier } from './repo';
+import type { Clock, IdTokenVerifier, Notifier } from './repo';
 import { DEMO_MEMBER_EMAIL, seedAdmins, seedSite, seedSites } from './seed';
 import { Platform } from './services';
 
@@ -22,6 +22,7 @@ export async function createMemoryPlatform(opts: {
   exposeDevCodes?: boolean;
   masterKey?: string;
   rateLimitScale?: number;
+  idTokens?: IdTokenVerifier;
 } = {}): Promise<MemoryPlatform> {
   const keys = new DevKeyProvider(opts.masterKey ?? 'preview-master-key');
   const now = opts.clock?.now() ?? new Date();
@@ -54,7 +55,7 @@ export async function createMemoryPlatform(opts: {
       if (!r) { r = new MemorySiteRepo(); sites.set(id, r); }
       return r;
     },
-    keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange, rateLimitScale: opts.rateLimitScale,
+    keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange, rateLimitScale: opts.rateLimitScale, idTokens: opts.idTokens,
   });
 
   return {

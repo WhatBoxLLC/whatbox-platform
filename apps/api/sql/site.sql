@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS members (
 CREATE INDEX IF NOT EXISTS members_search_idx ON members (status, profile_complete, gender, birth_year);
 CREATE INDEX IF NOT EXISTS members_geo_idx ON members (lat, lng);
 CREATE INDEX IF NOT EXISTS members_active_idx ON members (last_active_at DESC);
+-- HMACs of Apple / Google subject ids for social sign-in
+ALTER TABLE members ADD COLUMN IF NOT EXISTS identity_hashes text[] NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS members_identity_idx ON members USING gin (identity_hashes);
 
 CREATE TABLE IF NOT EXISTS photos (
   id         text PRIMARY KEY,
@@ -50,6 +53,14 @@ CREATE TABLE IF NOT EXISTS likes (
 CREATE INDEX IF NOT EXISTS likes_to_idx ON likes (to_id);
 -- VIP like: the sender spent tokens to be shown first
 ALTER TABLE likes ADD COLUMN IF NOT EXISTS vip boolean NOT NULL DEFAULT false;
+
+-- Private bookmarks. Never shown to the other person.
+CREATE TABLE IF NOT EXISTS favorites (
+  from_id  text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  to_id    text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  at       timestamptz NOT NULL,
+  PRIMARY KEY (from_id, to_id)
+);
 
 -- "Not for me" in Discover. The profile can come back after the site's cooldown.
 CREATE TABLE IF NOT EXISTS passes (

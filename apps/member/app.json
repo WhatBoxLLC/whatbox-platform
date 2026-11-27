@@ -9,7 +9,8 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.whatbox.afterh"
+      "bundleIdentifier": "com.whatbox.afterh",
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "com.whatbox.afterh",
@@ -31,7 +32,8 @@
         {
           "asyncRoutes": false
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": false

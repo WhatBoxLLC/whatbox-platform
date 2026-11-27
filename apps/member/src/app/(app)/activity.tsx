@@ -8,7 +8,7 @@ import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSession } from '../../lib/session';
 import { Badge, Btn, Card, Chip, Grid, H, Icon, Loading, Notice, PhotoTile, relTime, Segmented, Silhouette, Txt, useTheme } from '../../ui/kit';
 
-type Kind = 'likes' | 'views' | 'mine';
+type Kind = 'likes' | 'views' | 'mine' | 'favorites';
 type Quick = 'all' | 'vip' | 'fits' | 'serious' | 'new';
 const QUICK: { value: Quick; label: string; test: (p: ActivityPerson) => boolean }[] = [
   { value: 'all', label: 'All', test: () => true },
@@ -30,8 +30,8 @@ export default function Activity() {
   const tier = me?.member.tier ?? 'free';
 
   const load = useCallback(async () => {
-    const [likes, views, mine] = await Promise.all([api.activity('likes'), api.activity('views'), api.activity('mine')]);
-    setLists({ likes, views, mine });
+    const [likes, views, mine, favorites] = await Promise.all([api.activity('likes'), api.activity('views'), api.activity('mine'), api.activity('favorites')]);
+    setLists({ likes, views, mine, favorites });
   }, [api]);
   useEffect(() => { load(); }, [load, tier, me?.paywallEnabled]);
 
@@ -63,6 +63,7 @@ export default function Activity() {
           { value: 'likes', label: `Liked you${lists.likes ? ' · ' + lists.likes.total : ''}` },
           { value: 'views', label: `Viewed${lists.views ? ' · ' + lists.views.total : ''}` },
           { value: 'mine', label: 'Your likes' },
+          { value: 'favorites', label: 'Favorites' },
         ]} />
 
         {kind === 'likes' && list && list.people.length > 0 ? (
@@ -103,7 +104,7 @@ export default function Activity() {
               <Card style={{ alignItems: 'center', gap: 6 }}>
                 <Icon name="heart" size={28} color={t.sub} />
                 <Txt bold>{list.people.length && quick !== 'all' ? 'No one in this filter' : 'Nothing here yet'}</Txt>
-                <Txt sub center>{kind === 'mine' ? 'Like someone from Discover and they will show up here.' : 'When people find you, they will show up here.'}</Txt>
+                <Txt sub center>{kind === 'favorites' ? 'Tap the star on a profile to save it here. They are not told.' : kind === 'mine' ? 'Like someone from Discover and they will show up here.' : 'When people find you, they will show up here.'}</Txt>
               </Card>
             ) : (
               <Grid min={190} gap={14}>

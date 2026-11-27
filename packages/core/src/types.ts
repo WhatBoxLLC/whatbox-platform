@@ -132,6 +132,7 @@ export interface Member {
   tier: Tier;
   hideExplicit: boolean; // member's own filter for explicit content
   units?: Units; // overrides the site default
+  identityHashes?: string[]; // HMACs of "apple:<sub>" / "google:<sub>" for social sign-in
   createdAt: string;
   lastActiveAt: string;
 }
@@ -163,6 +164,7 @@ export interface PrivateAccess {
 
 export interface Like { fromId: string; toId: string; at: string; vip?: boolean } // vip: sent with priority
 export interface Pass { fromId: string; toId: string; at: string }
+export interface Favorite { fromId: string; toId: string; at: string } // private bookmark, never shown to them
 export interface View { viewerId: string; viewedId: string; at: string }
 export interface Block { blockerId: string; blockedId: string; at: string }
 
@@ -283,6 +285,7 @@ export interface MemberProfile extends MemberCard {
   tier: Tier; // their tier, shown as a VIP badge
   verified: boolean;
   blockedByMe: boolean;
+  favoritedByMe: boolean;
   canMessage: boolean;
   messageLockReason?: string;
 }
@@ -332,8 +335,9 @@ export interface ActivityPerson extends MemberCard {
   likedBack: boolean;
 }
 
+export type ActivityKind = 'likes' | 'views' | 'mine' | 'favorites';
 export interface ActivityList {
-  kind: 'likes' | 'views' | 'mine';
+  kind: ActivityKind;
   total: number;
   vipCount: number;
   hidden: number; // people my tier can't see yet (shown as a count)

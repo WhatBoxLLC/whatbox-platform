@@ -3,7 +3,7 @@
 // the one-database-per-site layout of production.
 import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
 import type {
-  AdminUser, Block, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
+  AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
   PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
@@ -56,19 +56,20 @@ export class MemoryControlRepo implements ControlRepo {
 
 export interface SiteSnapshot {
   members: Member[]; photos: Photo[]; access: PrivateAccess[]; likes: Like[]; views: View[];
-  blocks: Block[]; passes: Pass[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
+  blocks: Block[]; passes: Pass[]; favorites: Favorite[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
   moderation: ModerationItem[]; pages: ContentPage[]; challenges: VerificationChallenge[];
   sessions: MemberSession[];
 }
 
 export class MemorySiteRepo implements SiteRepo {
   d: SiteSnapshot = {
-    members: [], photos: [], access: [], likes: [], views: [], blocks: [], passes: [], messages: [], optins: [],
+    members: [], photos: [], access: [], likes: [], views: [], blocks: [], passes: [], favorites: [], messages: [], optins: [],
     reports: [], moderation: [], pages: [], challenges: [], sessions: [],
   };
   constructor(snap?: Partial<SiteSnapshot>) {
     if (snap) Object.assign(this.d, clone(snap));
     this.d.passes ??= [];
+    this.d.favorites ??= [];
   }
   snapshot(): SiteSnapshot { return clone(this.d); }
 
@@ -83,9 +84,26 @@ export class MemorySiteRepo implements SiteRepo {
     const set = new Set(ids);
     return clone(this.d.members.filter((m) => set.has(m.id)));
   }
-  async findMemberByHash(kind: 'email' | 'phone', hash: string) {
-    const m = this.d.members.find((x) => (kind === 'email' ? x.emailHash : x.phoneHash) === hash);
+  async findMemberByHash(kind: 'email' | 'phone' | 'identity', hash: string) {
+    const m = this.d.members.find((x) => (kind === 'identity' ? x.identityHashes?.includes(hash) : (kind === 'email' ? x.emailHash : x.phoneHash) === hash));
     return clone(m ?? null);
+  }
+  async deleteMember(id: string) {
+    const d = this.d;
+    const pair = (a: string, b: string) => a === id || b === id;
+    d.members = d.members.filter((m) => m.id !== id);
+    d.photos = d.photos.filter((p) => p.memberId !== id);
+    d.access = d.access.filter((x) => !pair(x.ownerId, x.viewerId));
+    d.likes = d.likes.filter((x) => !pair(x.fromId, x.toId));
+    d.passes = d.passes.filter((x) => !pair(x.fromId, x.toId));
+    d.favorites = d.favorites.filter((x) => !pair(x.fromId, x.toId));
+    d.views = d.views.filter((x) => !pair(x.viewerId, x.viewedId));
+    d.blocks = d.blocks.filter((x) => !pair(x.blockerId, x.blockedId));
+    d.messages = d.messages.filter((x) => !pair(x.fromId, x.toId));
+    d.optins = d.optins.filter((x) => !pair(x.memberId, x.otherId));
+    d.reports = d.reports.filter((x) => !pair(x.reporterId, x.targetId));
+    d.moderation = d.moderation.filter((x) => x.memberId !== id);
+    d.sessions = d.sessions.filter((x) => x.memberId !== id);
   }
   async saveMember(m: Member) { this.upsert(this.d.members, m, (x) => x.id === m.id); }
   async queryMembers(q: MemberQuery) {
@@ -140,6 +158,11 @@ export class MemorySiteRepo implements SiteRepo {
   async addPass(p: Pass) {
     this.upsert(this.d.passes, p, (x) => x.fromId === p.fromId && x.toId === p.toId);
   }
+  async setFavorite(f: Favorite, on: boolean) {
+    this.d.favorites = this.d.favorites.filter((x) => !(x.fromId === f.fromId && x.toId === f.toId));
+    if (on) this.d.favorites.push(clone(f));
+  }
+  async listFavoritesFrom(id: string) { return clone(this.d.favorites.filter((f) => f.fromId === id)); }
   async listPassesFrom(id: string, since: string) {
     return clone(this.d.passes.filter((p) => p.fromId === id && p.at >= since));
   }

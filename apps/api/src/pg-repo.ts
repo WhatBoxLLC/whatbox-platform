@@ -1,7 +1,7 @@
 // PostgreSQL implementations of the core repositories.
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
-  AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Like, Pass, Member, MemberQuery, MemberSession,
+  AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Favorite, Like, Pass, Member, MemberQuery, MemberSession,
   Message, ModerationItem, Photo, PrivateAccess, Report, ReviewStatus, Site, SiteRepo, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
@@ -74,18 +74,36 @@ export class PgSiteRepo implements SiteRepo {
     if (!ids.length) return [];
     return docs<Member>((await this.db.query('SELECT doc FROM members WHERE id = ANY($1)', [ids])).rows);
   }
-  async findMemberByHash(kind: 'email' | 'phone', hash: string) {
+  async findMemberByHash(kind: 'email' | 'phone' | 'identity', hash: string) {
+    if (kind === 'identity') return (await this.db.query('SELECT doc FROM members WHERE $1 = ANY(identity_hashes)', [hash])).rows[0]?.doc ?? null;
     const col = kind === 'email' ? 'email_hash' : 'phone_hash';
     return (await this.db.query(`SELECT doc FROM members WHERE ${col}=$1`, [hash])).rows[0]?.doc ?? null;
   }
+  // Rows that point at the member cascade (photos, likes, messages, sessions...). Reports and
+  // moderation items keep the id only inside text/json, so they are removed explicitly.
+  async deleteMember(id: string) {
+    const c = await this.db.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('DELETE FROM reports WHERE reporter_id=$1 OR target_id=$1', [id]);
+      await c.query(`DELETE FROM moderation WHERE doc->>'memberId'=$1`, [id]);
+      await c.query('DELETE FROM members WHERE id=$1', [id]);
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK');
+      throw e;
+    } finally {
+      c.release();
+    }
+  }
   async saveMember(m: Member) {
     await this.db.query(
-      `INSERT INTO members (id,status,profile_complete,display_name,gender,birth_year,lat,lng,city,premium,email_hash,phone_hash,created_at,last_active_at,doc)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      `INSERT INTO members (id,status,profile_complete,display_name,gender,birth_year,lat,lng,city,premium,email_hash,phone_hash,created_at,last_active_at,doc,identity_hashes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (id) DO UPDATE SET status=$2,profile_complete=$3,display_name=$4,gender=$5,birth_year=$6,lat=$7,lng=$8,city=$9,
-         premium=$10,email_hash=$11,phone_hash=$12,last_active_at=$14,doc=$15`,
+         premium=$10,email_hash=$11,phone_hash=$12,last_active_at=$14,doc=$15,identity_hashes=$16`,
       [m.id, m.status, m.profileComplete, m.displayName, m.gender, m.birthYear, m.lat, m.lng, m.city, m.tier === 'paid' || m.tier === 'vip',
-        m.emailHash ?? null, m.phoneHash ?? null, m.createdAt, m.lastActiveAt, m],
+        m.emailHash ?? null, m.phoneHash ?? null, m.createdAt, m.lastActiveAt, m, m.identityHashes ?? []],
     );
   }
   async queryMembers(q: MemberQuery) {
@@ -150,6 +168,14 @@ export class PgSiteRepo implements SiteRepo {
          at = CASE WHEN EXCLUDED.vip AND NOT likes.vip THEN EXCLUDED.at ELSE likes.at END`,
       [l.fromId, l.toId, l.at, !!l.vip],
     );
+  }
+  async setFavorite(f: Favorite, on: boolean) {
+    if (on) await this.db.query('INSERT INTO favorites (from_id,to_id,at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [f.fromId, f.toId, f.at]);
+    else await this.db.query('DELETE FROM favorites WHERE from_id=$1 AND to_id=$2', [f.fromId, f.toId]);
+  }
+  async listFavoritesFrom(id: string) {
+    return (await this.db.query('SELECT * FROM favorites WHERE from_id=$1 ORDER BY at DESC', [id])).rows
+      .map((r: any): Favorite => ({ fromId: r.from_id, toId: r.to_id, at: iso(r.at) }));
   }
   async addPass(p: Pass) {
     await this.db.query('INSERT INTO passes (from_id,to_id,at) VALUES ($1,$2,$3) ON CONFLICT (from_id,to_id) DO UPDATE SET at=EXCLUDED.at', [p.fromId, p.toId, p.at]);

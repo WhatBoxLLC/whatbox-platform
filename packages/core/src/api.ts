@@ -4,7 +4,7 @@
 import { RuleError } from './rules';
 import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
-  ActivityList, AdminMemberRow, ClientPlatform, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
+  ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
   SearchResult, Site, SiteMode, SiteStats, Tier,
 } from './types';
@@ -45,7 +45,10 @@ export interface MemberApi {
   discover(): Promise<DiscoverCard[]>;
   block(id: string, on: boolean): Promise<{ blocked: boolean }>;
   report(id: string, reason: string): Promise<{ ok: boolean }>;
-  activity(kind: 'likes' | 'views' | 'mine'): Promise<ActivityList>;
+  activity(kind: ActivityKind): Promise<ActivityList>;
+  favorite(id: string, on: boolean): Promise<{ favorite: boolean }>;
+  deleteAccount(confirm: string): Promise<{ deleted: boolean }>;
+  signInWithProvider(provider: 'apple' | 'google', idToken: string): Promise<{ token: string; isNew: boolean }>;
 
   conversations(): Promise<ConversationSummary[]>;
   conversation(otherId: string): Promise<ConversationView>;
@@ -113,6 +116,9 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     block: (id, on) => wrap(async () => platform.block(await ctx(), id, on)),
     report: (id, r) => wrap(async () => platform.report(await ctx(), id, r)),
     activity: (k) => wrap(async () => platform.activity(await ctx(), k)),
+    favorite: (id, on) => wrap(async () => platform.favorite(await ctx(), id, on)),
+    deleteAccount: (c) => wrap(async () => { const r = await platform.deleteAccount(await ctx(), c); token = null; return r; }),
+    signInWithProvider: (p, t) => wrap(async () => platform.signInWithProvider(await site(), p, t)),
     conversations: () => wrap(async () => platform.conversations(await ctx())),
     conversation: (id) => wrap(async () => platform.conversation(await ctx(), id)),
     send: (id, b) => wrap(async () => platform.send(await ctx(), id, b)),

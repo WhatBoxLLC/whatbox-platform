@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { useSession } from '../lib/session';
+import { SocialSignIn } from './SocialSignIn';
 import { Btn, Check, ErrorText, Field, H, Icon, Segmented, Txt, useTheme } from './kit';
 
 export function JoinForm({ title = 'Join free', signIn = false }: { title?: string; signIn?: boolean }) {
@@ -43,6 +44,7 @@ export function JoinForm({ title = 'Join free', signIn = false }: { title?: stri
       ) : null}
       <ErrorText error={error} />
       <Btn label="Send my code" size="lg" onPress={send} busy={busy} />
+      <SocialSignIn />
       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
         <Icon name="lock" size={16} color={t.sub} />
         <Txt sub size={13}>Your email or number is never shown to other members.</Txt>

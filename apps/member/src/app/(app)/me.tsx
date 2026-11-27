@@ -150,6 +150,33 @@ function MembershipCard() {
   );
 }
 
+function DeleteAccount() {
+  const { api, site, signOut } = useSession();
+  const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Card style={{ gap: 10 }}>
+      <H size={18} level={2}>Delete account</H>
+      <Txt sub size={14}>{`Permanently removes your profile, photos, likes and messages from ${site.name}. This can't be undone.`}</Txt>
+      {!open ? <Btn size="sm" kind="danger" label="Delete my account" style={{ alignSelf: 'flex-start' }} onPress={() => setOpen(true)} /> : (
+        <View style={{ gap: 8 }}>
+          <Field label="Type DELETE to confirm" value={confirm} onChangeText={setConfirm} autoCapitalize="characters" />
+          <ErrorText error={error} />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Btn size="sm" kind="danger" label="Delete forever" disabled={confirm.trim().toUpperCase() !== 'DELETE'} onPress={async () => {
+              setError(null);
+              try { await api.deleteAccount(confirm); await signOut().catch(() => {}); router.replace('/'); }
+              catch (e) { setError(e instanceof ApiError ? e.message : 'Could not delete. Try again.'); }
+            }} />
+            <Btn size="sm" kind="secondary" label="Cancel" onPress={() => { setOpen(false); setConfirm(''); }} />
+          </View>
+        </View>
+      )}
+    </Card>
+  );
+}
+
 function SettingsTab() {
   const { api, me, setMe, signOut, site } = useSession();
   const m = me!.member;
@@ -172,6 +199,7 @@ function SettingsTab() {
         <Txt sub>Signed in with {m.contact || 'a verified contact'}. This is encrypted and never shown to other members.</Txt>
         <Btn size="sm" kind="secondary" icon="logout" label="Sign out" style={{ alignSelf: 'flex-start' }} onPress={async () => { await signOut(); router.replace('/'); }} />
       </Card>
+      <DeleteAccount />
     </View>
   );
 }

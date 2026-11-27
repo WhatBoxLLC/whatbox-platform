@@ -71,6 +71,12 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   await api.deletePhoto(added.id);
   assert.equal((await fetch(added.url!)).status, 404);
 
+  // Favorites and provider sign-in (not configured here, so it is refused cleanly)
+  await api.favorite(rosa.id, true);
+  assert.equal((await api.activity('favorites')).people[0].id, rosa.id);
+  await api.favorite(rosa.id, false);
+  await assert.rejects(api.signInWithProvider('google', 'x'), /not available/);
+
   // Explicit-photo rule enforced server-side
   await assert.rejects(api.addPhoto({ kind: 'private', rating: 'explicit' }));
 
@@ -88,5 +94,13 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   await admin.updateSite('site_afterh', { settings: { membership: { paywallEnabled: false } } });
   const stats = await admin.stats('site_afterh');
   assert.ok(stats.members > 40);
+  // Account deletion, on a throwaway member
+  const temp = createHttpMemberApi(base, 'afterh', 'web');
+  const ts = await temp.startVerification('email', `delete.me.${Date.now()}@example.com`);
+  temp.setToken((await temp.verify(ts.challengeId, ts.devCode!)).token);
+  await temp.updateMe({ displayName: 'Temp', birthYear: 1990, gender: 'man', seeking: ['woman'], postal: '80202', fields: { hsv_status: 'HSV-1' } });
+  await temp.like(rosa.id, true);
+  await temp.deleteAccount('DELETE');
+
   console.log('smoke ok:', { members: stats.members, openModeration: stats.openModeration, searchTotal: res.total });
 })().catch((e) => { console.error('smoke FAILED', e); process.exit(1); });

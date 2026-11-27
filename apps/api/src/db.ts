@@ -4,6 +4,7 @@ import { config, dbUrl } from './config';
 import { PgControlRepo, PgSiteRepo, siteDbName } from './pg-repo';
 import { createPhotoStore } from './photos';
 import { createNotifier } from './notify';
+import { createIdTokenVerifier } from './idp';
 
 const pools = new Map<string, Pool>();
 export function pool(dbName: string): Pool {
@@ -55,6 +56,7 @@ export function createPlatform() {
     keys: keyProvider(),
     notifier: createNotifier(),
     photos,
+    idTokens: createIdTokenVerifier(),
     exposeDevCodes: config.exposeDevCodes,
     rateLimitScale: config.rateLimitScale,
   });

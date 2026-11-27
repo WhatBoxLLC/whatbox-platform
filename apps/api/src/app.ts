@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { normalizeImage } from './photos';
-import { type ClientPlatform, type ContentPage, type PhotoKind, type PhotoRating, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
+import { type ActivityKind, type ClientPlatform, type ContentPage, type PhotoKind, type PhotoRating, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
 import type { Request, Response } from 'express';
 
 export const PLATFORM = 'PLATFORM';
@@ -52,6 +52,10 @@ export class PublicController extends SiteScoped {
   @Post('auth/start') async start(@Req() r: Request, @Body() b: { channel: 'email' | 'phone'; target: string }) {
     return this.p.startVerification(await this.site(r), b.channel, String(b.target ?? ''), { ip: r.ip });
   }
+  @Post('auth/provider') async provider(@Req() r: Request, @Body() b: { provider: string; idToken: string }) {
+    if (b.provider !== 'apple' && b.provider !== 'google') throw new RuleError('bad_provider', 'Unknown sign-in option.');
+    return this.p.signInWithProvider(await this.site(r), b.provider, String(b.idToken ?? ''), { ip: r.ip });
+  }
   @Post('auth/verify') async verify(@Req() r: Request, @Body() b: { challengeId: string; code: string }) {
     return this.p.verifyCode(await this.site(r), String(b.challengeId), String(b.code));
   }
@@ -83,6 +87,7 @@ export class MeController extends SiteScoped {
     return this.p.updatePhoto(await this.ctx(r), id, { kind: b.kind, rating: b.rating });
   }
   @Delete('photos/:id') async delPhoto(@Req() r: Request, @Param('id') id: string) { return this.p.deletePhoto(await this.ctx(r), id); }
+  @Post('delete') async del(@Req() r: Request, @Body() b: { confirm?: string }) { return this.p.deleteAccount(await this.ctx(r), String(b.confirm ?? '')); }
   @Post('tier') async tier(@Req() r: Request, @Body() b: { tier: Tier }) { return this.p.setTier(await this.ctx(r), b.tier); }
   @Get('private-access') async access(@Req() r: Request) { return this.p.accessLists(await this.ctx(r)); }
   @Post('private-access/:viewerId') async decide(@Req() r: Request, @Param('viewerId') v: string, @Body() b: { action: 'grant' | 'deny' | 'revoke' }) {
@@ -99,6 +104,8 @@ export class MembersController extends SiteScoped {
   }
   @Get(':id') async profile(@Req() r: Request, @Param('id') id: string) { return this.p.profile(await this.ctx(r), id); }
   @Post(':id/like') async like(@Req() r: Request, @Param('id') id: string) { return this.p.like(await this.ctx(r), id, true); }
+  @Post(':id/favorite') async fav(@Req() r: Request, @Param('id') id: string) { return this.p.favorite(await this.ctx(r), id, true); }
+  @Delete(':id/favorite') async unfav(@Req() r: Request, @Param('id') id: string) { return this.p.favorite(await this.ctx(r), id, false); }
   @Post(':id/pass') async pass(@Req() r: Request, @Param('id') id: string) { return this.p.pass(await this.ctx(r), id); }
   @Delete(':id/like') async unlike(@Req() r: Request, @Param('id') id: string) { return this.p.like(await this.ctx(r), id, false); }
   @Post(':id/block') async block(@Req() r: Request, @Param('id') id: string) { return this.p.block(await this.ctx(r), id, true); }
@@ -113,8 +120,7 @@ export class MembersController extends SiteScoped {
 export class SocialController extends SiteScoped {
   constructor(@Inject(PLATFORM) p: Platform) { super(p); }
   @Get('discover') async discover(@Req() r: Request) { return this.p.discover(await this.ctx(r)); }
-  @Get('activity/:kind') async activity(@Req() r: Request, @Param('kind') kind: 'likes' | 'views' | 'mine') {
-    if (!['likes', 'views', 'mine'].includes(kind)) throw new RuleError('bad_kind', 'Unknown list.', 404);
+  @Get('activity/:kind') async activity(@Req() r: Request, @Param('kind') kind: ActivityKind) {
     return this.p.activity(await this.ctx(r), kind);
   }
   @Get('conversations') async list(@Req() r: Request) { return this.p.conversations(await this.ctx(r)); }

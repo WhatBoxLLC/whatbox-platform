@@ -1,7 +1,7 @@
 // Storage interfaces. The API implements these on PostgreSQL (one database per site plus
 // a control database); the clickable preview implements them in memory.
 import type {
-  AdminUser, Block, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
+  AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
   Photo, PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
@@ -41,7 +41,8 @@ export interface SiteRepo {
   // members
   getMember(id: string): Promise<Member | null>;
   getMembers(ids: string[]): Promise<Member[]>;
-  findMemberByHash(kind: 'email' | 'phone', hash: string): Promise<Member | null>;
+  findMemberByHash(kind: 'email' | 'phone' | 'identity', hash: string): Promise<Member | null>;
+  deleteMember(id: string): Promise<void>; // the member and everything that references them
   saveMember(m: Member): Promise<void>;
   queryMembers(q: MemberQuery): Promise<Member[]>;
   listAllMembers(limit: number, offset: number, search?: string): Promise<{ total: number; rows: Member[] }>;
@@ -65,6 +66,8 @@ export interface SiteRepo {
   listLikesTo(memberId: string): Promise<Like[]>;
   listLikesFrom(memberId: string): Promise<Like[]>;
   addPass(p: Pass): Promise<void>;
+  setFavorite(f: Favorite, on: boolean): Promise<void>;
+  listFavoritesFrom(memberId: string): Promise<Favorite[]>;
   listPassesFrom(memberId: string, sinceIso: string): Promise<Pass[]>;
   recordView(v: View): Promise<void>; // keeps the latest view per pair
   listViewsOf(memberId: string): Promise<View[]>;
@@ -119,6 +122,11 @@ export interface PhotoStore {
   put(site: Site, key: string, data: Uint8Array, contentType: string): Promise<void>;
   delete(site: Site, key: string): Promise<void>;
   readUrl(site: Site, key: string): string; // short-lived signed URL
+}
+
+// Verifies an Apple or Google ID token for one site (its own client IDs) and returns the stable user id.
+export interface IdTokenVerifier {
+  verify(site: Site, provider: 'apple' | 'google', idToken: string): Promise<{ sub: string; email?: string; emailVerified: boolean }>;
 }
 
 export interface Clock { now(): Date }

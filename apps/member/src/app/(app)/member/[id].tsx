@@ -116,6 +116,11 @@ export default function ProfileScreen() {
                 const r = await api.like(p.id, !p.likedByMe);
                 setNote(r.mutual ? `You and ${p.displayName} like each other.` : null);
               })} style={{ minWidth: 120 }} />
+              <Pressable accessibilityLabel={p.favoritedByMe ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={p.favoritedByMe}
+                onPress={() => act(() => api.favorite(p.id, !p.favoritedByMe), p.favoritedByMe ? undefined : `Saved to your favorites. ${p.displayName} isn't told.`)}
+                style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1.5, borderColor: p.favoritedByMe ? '#D9A43A' : t.line, backgroundColor: p.favoritedByMe ? '#FFF4DC' : t.surface, alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name="star" size={20} color={p.favoritedByMe ? '#A8740F' : t.sub} />
+              </Pressable>
               <Pressable accessibilityLabel="Block or report" onPress={() => setSafety(!safety)} style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1.5, borderColor: t.line, backgroundColor: t.surface, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="flag" size={20} color={t.sub} />
               </Pressable>

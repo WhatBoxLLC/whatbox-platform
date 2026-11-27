@@ -2,14 +2,14 @@
 // so the rules a member hits are the same everywhere.
 import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { lookupPostal } from './geo';
-import type { ControlRepo, Clock, Notifier, PhotoStore, SiteRepo } from './repo';
+import type { ControlRepo, Clock, IdTokenVerifier, Notifier, PhotoStore, SiteRepo } from './repo';
 import { systemClock } from './repo';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
 } from './rules';
 import type {
-  AccessStatus, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
+  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
   SiteSettings, SiteStats, SiteTheme,
@@ -21,6 +21,7 @@ export interface PlatformDeps {
   keys?: KeyProvider;
   notifier: Notifier;
   photos?: PhotoStore; // absent in the preview, which keeps data URIs
+  idTokens?: IdTokenVerifier; // Apple and Google sign-in; absent where not configured
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
   rateLimitScale?: number; // multiplies every rate limit; >1 only for local dev and test runs
@@ -167,28 +168,88 @@ export class Platform {
     let member = await repo.findMemberByHash(c.channel, c.targetHash);
     const isNew = !member;
     if (!member) {
-      const now = this.iso();
-      member = {
-        id: randomId('m_'), displayName: '', verifiedAt: now, profileComplete: false,
-        birthYear: this.now().getUTCFullYear() - 30, gender: 'woman', seeking: ['man'], ageMin: 25, ageMax: 50,
-        city: '', region: '', postal: '', lat: 0, lng: 0, about: '', fields: {}, status: 'active',
-        tier: 'free', hideExplicit: true, createdAt: now, lastActiveAt: now,
-      };
+      member = this.newMember();
       if (c.channel === 'email') { member.emailHash = c.targetHash; member.emailEnc = c.targetEnc; }
       else { member.phoneHash = c.targetHash; member.phoneEnc = c.targetEnc; }
       await repo.saveMember(member);
     }
+    return this.startSession(site, member, isNew);
+  }
+
+  private newMember(): Member {
+    const now = this.iso();
+    return {
+      id: randomId('m_'), displayName: '', verifiedAt: now, profileComplete: false,
+      birthYear: this.now().getUTCFullYear() - 30, gender: 'woman', seeking: ['man'], ageMin: 25, ageMax: 50,
+      city: '', region: '', postal: '', lat: 0, lng: 0, about: '', fields: {}, status: 'active',
+      tier: 'free', hideExplicit: true, createdAt: now, lastActiveAt: now,
+    };
+  }
+
+  // Tokens are random and only their HMAC is stored, so a database leak does not hand out live sessions.
+  private async sessionKey(site: Site, token: string) {
+    return this.crypto(site).lookupHash('session:' + token);
+  }
+
+  private async startSession(site: Site, member: Member, isNew: boolean) {
     if (member.status === 'suspended') throw new RuleError('suspended', 'This account is suspended.', 403);
+    const repo = await this.repo(site);
     const token = site.slug + '.' + randomId();
-    await repo.saveSession({ token, memberId: member.id, expiresAt: new Date(this.now().getTime() + SESSION_TTL_MS).toISOString() });
+    await repo.saveSession({ token: await this.sessionKey(site, token), memberId: member.id, expiresAt: new Date(this.now().getTime() + SESSION_TTL_MS).toISOString() });
     this.changed();
     return { token, isNew: isNew || !member.profileComplete };
+  }
+
+  // Apple or Google. Links to an existing account with the same verified email, otherwise creates one.
+  async signInWithProvider(site: Site, provider: 'apple' | 'google', idToken: string, meta: { ip?: string } = {}) {
+    if (!this.deps.idTokens) throw new RuleError('provider_off', 'That sign-in option is not available yet.', 400);
+    if (meta.ip) await this.limit(`idp-ip:${meta.ip}`, 3600, 60, 'Too many sign-in attempts from this network. Try again later.');
+    let claims: Awaited<ReturnType<IdTokenVerifier['verify']>>;
+    try { claims = await this.deps.idTokens.verify(site, provider, idToken); }
+    catch { throw new RuleError('provider_invalid', 'We could not confirm that sign-in. Please try again.', 401); }
+    const repo = await this.repo(site);
+    const crypto = this.crypto(site);
+    const idHash = await crypto.lookupHash(`${provider}:${claims.sub}`);
+    let member = await repo.findMemberByHash('identity', idHash);
+    let isNew = false;
+    if (!member && claims.email && claims.emailVerified) {
+      const email = claims.email.trim().toLowerCase();
+      member = await repo.findMemberByHash('email', await crypto.lookupHash(email));
+      if (!member) {
+        member = this.newMember();
+        member.emailHash = await crypto.lookupHash(email);
+        member.emailEnc = await crypto.encrypt(email);
+        isNew = true;
+      }
+    }
+    if (!member) { member = this.newMember(); isNew = true; } // Apple "hide my email" without a relay address
+    member.identityHashes = [...new Set([...(member.identityHashes ?? []), idHash])];
+    await repo.saveMember(member);
+    return this.startSession(site, member, isNew);
+  }
+
+  // Permanent: photos, likes, messages, everything. Other members simply stop seeing this person.
+  async deleteAccount(ctx: MemberCtx, confirm: string) {
+    if (confirm.trim().toUpperCase() !== 'DELETE') throw new RuleError('confirm', 'Type DELETE to confirm.');
+    const photos = await ctx.repo.listPhotos(ctx.me.id);
+    for (const p of photos) if (p.blobKey) await this.deps.photos?.delete(ctx.site, p.blobKey);
+    await ctx.repo.deleteMember(ctx.me.id);
+    this.changed();
+    return { deleted: true };
+  }
+
+  async favorite(ctx: MemberCtx, id: string, on: boolean) {
+    this.requireComplete(ctx);
+    await this.other(ctx, id);
+    await ctx.repo.setFavorite({ fromId: ctx.me.id, toId: id, at: this.iso() }, on);
+    this.changed();
+    return { favorite: on };
   }
 
   async memberCtx(site: Site, token: string | null | undefined, platform: ClientPlatform): Promise<MemberCtx> {
     if (!token || !token.startsWith(site.slug + '.')) throw new RuleError('signed_out', 'Please sign in.', 401);
     const repo = await this.repo(site);
-    const s = await repo.getSession(token);
+    const s = await repo.getSession(await this.sessionKey(site, token));
     if (!s || Date.parse(s.expiresAt) < this.now().getTime()) throw new RuleError('signed_out', 'Please sign in.', 401);
     const me = await repo.getMember(s.memberId);
     if (!me) throw new RuleError('signed_out', 'Please sign in.', 401);
@@ -203,7 +264,7 @@ export class Platform {
 
   async signOut(site: Site, token: string) {
     const repo = await this.repo(site);
-    await repo.deleteSession(token);
+    await repo.deleteSession(await this.sessionKey(site, token));
     this.changed();
   }
 
@@ -553,6 +614,7 @@ export class Platform {
       privateAccess: access?.status ?? 'none',
       verified: !!m.verifiedAt,
       blockedByMe: blocks.some((b) => b.blockerId === ctx.me.id && b.blockedId === m.id),
+      favoritedByMe: (await ctx.repo.listFavoritesFrom(ctx.me.id)).some((f) => f.toId === m.id),
       canMessage: !lock,
       messageLockReason: lock,
     };
@@ -692,12 +754,14 @@ export class Platform {
     return { ok: true };
   }
 
-  async activity(ctx: MemberCtx, kind: 'likes' | 'views' | 'mine'): Promise<ActivityList> {
+  async activity(ctx: MemberCtx, kind: ActivityKind): Promise<ActivityList> {
+    if (!['likes', 'views', 'mine', 'favorites'].includes(kind)) throw new RuleError('bad_kind', 'Unknown list.', 404);
     this.requireComplete(ctx);
     const blocked = await this.blockedIds(ctx);
     let entries: { id: string; at: string; vip: boolean }[];
     if (kind === 'likes') entries = (await ctx.repo.listLikesTo(ctx.me.id)).map((l) => ({ id: l.fromId, at: l.at, vip: !!l.vip }));
     else if (kind === 'views') entries = (await ctx.repo.listViewsOf(ctx.me.id)).map((v) => ({ id: v.viewerId, at: v.at, vip: false }));
+    else if (kind === 'favorites') entries = (await ctx.repo.listFavoritesFrom(ctx.me.id)).map((f) => ({ id: f.toId, at: f.at, vip: false }));
     else entries = (await ctx.repo.listLikesFrom(ctx.me.id)).map((l) => ({ id: l.toId, at: l.at, vip: !!l.vip }));
     const members = (await ctx.repo.getMembers(entries.map((e) => e.id))).filter((m) => m.status === 'active' && !blocked.has(m.id));
     const byId = new Map(members.map((m) => [m.id, m]));
@@ -705,7 +769,7 @@ export class Platform {
     const perms = this.perms(ctx);
     // A priority like counts as coming from a VIP, so the default Free tier still sees it.
     const canSee = (e: { id: string; vip: boolean }) =>
-      kind === 'mine' || (kind === 'views' ? perms.seeWhoViewed : perms.seeLikesFrom.includes(e.vip ? 'vip' : this.tierOf(byId.get(e.id)!)));
+      kind === 'mine' || kind === 'favorites' || (kind === 'views' ? perms.seeWhoViewed : perms.seeLikesFrom.includes(e.vip ? 'vip' : this.tierOf(byId.get(e.id)!)));
     const visible = entries.filter(canSee);
     const hidden = entries.length - visible.length;
     const ms = ctx.site.settings.membership;
@@ -726,7 +790,7 @@ export class Platform {
     });
     // Busy inboxes: VIP first, then people who fit what I asked for, then serious profiles, newest first within each.
     const rank = (p: ActivityPerson) => (p.vip ? 4 : 0) + (p.fitsMe ? 2 : 0) + (p.serious ? 1 : 0);
-    people.sort((a, b) => (kind === 'mine' ? 0 : rank(b) - rank(a)) || b.at.localeCompare(a.at));
+    people.sort((a, b) => (kind === 'mine' || kind === 'favorites' ? 0 : rank(b) - rank(a)) || b.at.localeCompare(a.at));
     return {
       kind, total: entries.length, vipCount: entries.filter((e) => e.vip).length, hidden, locked: hidden > 0, people,
       upgradeLabel: up ? `${ms.tiers[up].label}${ms.tiers[up].priceLabel ? ' · ' + ms.tiers[up].priceLabel : ''}` : '',
@@ -909,6 +973,10 @@ export class Platform {
     return { challengeId: id, devCode: this.deps.exposeDevCodes && admin ? code : undefined };
   }
 
+  private async adminSessionKey(token: string) {
+    return hmacHex(await this.keys.siteKey('__admin__'), `admin-session:${token}`);
+  }
+
   private async adminCodeHash(id: string, code: string) {
     return hmacHex(await this.keys.siteKey('__admin__'), `admin-code:${id}:${code}`);
   }
@@ -929,14 +997,14 @@ export class Platform {
     }
     await this.deps.control.deleteAdminChallenge(challengeId);
     const token = 'adm.' + randomId();
-    await this.deps.control.saveAdminSession({ token, adminId: c.adminId, expiresAt: new Date(this.now().getTime() + SESSION_TTL_MS).toISOString() });
+    await this.deps.control.saveAdminSession({ token: await this.adminSessionKey(token), adminId: c.adminId, expiresAt: new Date(this.now().getTime() + SESSION_TTL_MS).toISOString() });
     this.changed();
     return { token };
   }
 
   async adminFromToken(token: string | null | undefined): Promise<AdminUser> {
     if (!token) throw new RuleError('signed_out', 'Please sign in.', 401);
-    const s = await this.deps.control.getAdminSession(token);
+    const s = await this.deps.control.getAdminSession(await this.adminSessionKey(token));
     if (!s || Date.parse(s.expiresAt) < this.now().getTime()) throw new RuleError('signed_out', 'Please sign in.', 401);
     const a = await this.deps.control.getAdmin(s.adminId);
     if (!a) throw new RuleError('signed_out', 'Please sign in.', 401);

@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Skipped until Azure is set up for this environment (see infra/README.md).
+    if: vars.AZURE_CLIENT_ID != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Settings and secrets per GitHub environment (dev, prod):

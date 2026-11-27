@@ -1,4 +1,4 @@
-import { ApiError, DEFAULT_STRICT, GENDERS, type AccessRow, type Gender, type Member, type StrictPrefs } from '@whatbox/core';
+import { ApiError, DEFAULT_NOTIFY, DEFAULT_STRICT, GENDERS, type NotifyPrefs, type AccessRow, type Gender, type Member, type StrictPrefs } from '@whatbox/core';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
@@ -12,11 +12,14 @@ import { TIERS, type Tier, type TierPerms, type Units } from '@whatbox/core';
 import { PhotoManager } from '../../ui/PhotoManager';
 
 type Tab = 'profile' | 'photos' | 'access' | 'settings';
+const NOTIFY_ROWS: [keyof NotifyPrefs, string][] = [
+  ['messages', 'New messages'], ['matches', 'Mutual likes'], ['likes', 'Someone likes you'], ['photos', 'Photo approved or not approved'], ['access', 'Private photo requests and shares'],
+];
 
 export default function Me() {
   const { me, site } = useSession();
   const params = useLocalSearchParams<{ tab?: string }>();
-  const [tab, setTab] = useState<Tab>(params.tab === 'settings' ? 'settings' : 'profile');
+  const [tab, setTab] = useState<Tab>((['profile', 'photos', 'access', 'settings'] as Tab[]).includes(params.tab as Tab) ? (params.tab as Tab) : 'profile');
   if (!me) return null;
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
@@ -242,8 +245,15 @@ function SettingsTab() {
         <H size={18} level={2}>Units</H>
         <Txt sub size={14}>Heights always show both. This picks which comes first.</Txt>
         <Segmented<Units> value={m.unitsResolved} onChange={async (u) => setMe(await api.updateMe({ units: u }))} options={[
-          { value: 'imperial', label: 'Feet and inches' }, { value: 'metric', label: 'Centimeters' },
+          { value: 'imperial', label: 'Miles, feet and inches' }, { value: 'metric', label: 'Kilometers and cm' },
         ]} />
+      </Card>
+      <Card style={{ gap: 8 }}>
+        <H size={18} level={2}>Phone notifications</H>
+        <Txt sub size={14}>For the {site.name} app on iPhone and Android. Notifications never say what the site is about or who it's from.</Txt>
+        {NOTIFY_ROWS.map(([k, label]) => (
+          <Toggle key={k} label={label} value={{ ...DEFAULT_NOTIFY, ...m.notify }[k]} onChange={async (v) => setMe(await api.updateMe({ notify: { [k]: v } }))} />
+        ))}
       </Card>
       <MembershipCard />
       <Card style={{ gap: 10 }}>

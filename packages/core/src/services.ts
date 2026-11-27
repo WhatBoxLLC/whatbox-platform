@@ -5,7 +5,7 @@ import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCr
 import { builtinGeo, unitsForCountry } from './geo';
 import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
 import { systemClock } from './repo';
-import { DEFAULT_LICENSING, DEFAULT_STRICT, isGender, type StrictPrefs } from './types';
+import { DEFAULT_LICENSING, DEFAULT_NOTIFY, DEFAULT_STRICT, isGender, type NotifyPrefs, type StrictPrefs } from './types';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
@@ -57,6 +57,7 @@ export interface ProfilePatch {
   /** Default search distance in miles; null means anywhere. */
   maxMiles?: number | null;
   strict?: Partial<StrictPrefs>;
+  notify?: Partial<NotifyPrefs>;
   about?: string;
   fields?: Member['fields'];
   hideExplicit?: boolean;
@@ -410,6 +411,11 @@ export class Platform {
       const cur = { ...DEFAULT_STRICT, ...m.strict };
       for (const k of ['seeking', 'age', 'distance'] as const) if (typeof patch.strict[k] === 'boolean') cur[k] = patch.strict[k]!;
       m.strict = cur;
+    }
+    if (patch.notify) {
+      const cur = { ...DEFAULT_NOTIFY, ...m.notify };
+      for (const k of Object.keys(DEFAULT_NOTIFY) as (keyof NotifyPrefs)[]) if (typeof patch.notify[k] === 'boolean') cur[k] = patch.notify[k]!;
+      m.notify = cur;
     }
     if (patch.maxMiles !== undefined) m.maxMiles = patch.maxMiles === null ? null : Math.min(500, Math.max(5, Math.round(patch.maxMiles)));
     if (patch.about !== undefined) {
@@ -1264,7 +1270,12 @@ export class Platform {
     const status = decision === 'approve' ? 'approved' : 'rejected';
     if (item.kind === 'photo') {
       const p = await repo.getPhoto(item.refId);
-      if (p) await repo.savePhoto({ ...p, status });
+      if (p) {
+        await repo.savePhoto({ ...p, status });
+        if (p.status !== status) {
+          try { this.deps.events?.emit(site, p.memberId, { type: 'photo', photoId: p.id, status }); } catch { /* best effort */ }
+        }
+      }
     } else if (item.kind === 'message') {
       const m = await repo.getMessage(item.refId);
       // approve releases the message to the recipient; reject keeps it held forever

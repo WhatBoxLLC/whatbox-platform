@@ -183,6 +183,8 @@ export interface Member {
   maxMiles?: number | null;
   /** Which preferences are hard limits. Preferred ones widen when Discover runs out of people. */
   strict?: StrictPrefs;
+  /** Push notification choices; defaults in DEFAULT_NOTIFY. */
+  notify?: Partial<NotifyPrefs>;
   about: string;
   fields: Record<string, string | string[] | number | boolean>;
   status: MemberStatus;
@@ -419,7 +421,22 @@ export type MemberEvent =
   | { type: 'message'; fromId: string }
   | { type: 'like'; fromId: string; vip: boolean }
   | { type: 'match'; otherId: string }
-  | { type: 'access'; otherId: string; status: 'requested' | 'granted' };
+  | { type: 'access'; otherId: string; status: 'requested' | 'granted' }
+  | { type: 'photo'; photoId: string; status: 'approved' | 'rejected' };
+
+/** Which events reach a member's phone as push notifications. The in-app feed always shows everything. */
+export interface NotifyPrefs { messages: boolean; matches: boolean; likes: boolean; photos: boolean; access: boolean }
+export const DEFAULT_NOTIFY: NotifyPrefs = { messages: true, matches: true, likes: false, photos: true, access: true };
+export function wantsPush(prefs: Partial<NotifyPrefs> | undefined, ev: MemberEvent): boolean {
+  const p = { ...DEFAULT_NOTIFY, ...prefs };
+  switch (ev.type) {
+    case 'message': return p.messages;
+    case 'match': return p.matches;
+    case 'like': return p.likes;
+    case 'photo': return p.photos;
+    case 'access': return p.access;
+  }
+}
 
 export interface PushToken { memberId: string; token: string; platform: 'ios' | 'android' | 'web'; at: string }
 

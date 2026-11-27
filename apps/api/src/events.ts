@@ -1,7 +1,7 @@
 // Real-time delivery across API instances.
 // emit() → NOTIFY on the site's own database → every instance LISTENing on that database hands the
 // event to its open streams. Push notifications go out once, from the instance that emitted.
-import { LocalEventHub, type EventSink, type MemberEvent, type Site, type SiteRepo } from '@whatbox/core';
+import { LocalEventHub, wantsPush, type EventSink, type MemberEvent, type Site, type SiteRepo } from '@whatbox/core';
 import { Client } from 'pg';
 import { config, dbUrl } from './config';
 import { pool } from './db-pool';
@@ -10,18 +10,18 @@ import { siteDbName } from './pg-repo';
 const CHANNEL = 'member_events';
 
 export interface PushSender {
-  send(site: Site, tokens: string[], title: string, body: string): Promise<string[]>; // returns dead tokens
+  send(site: Site, tokens: string[], title: string, body: string, data?: Record<string, string>): Promise<string[]>; // returns dead tokens
 }
 
 // Expo's push service fronts both APNs and FCM. Text is generic on purpose: a lock screen
 // should never reveal what kind of site this is or who wrote.
 export class ExpoPushSender implements PushSender {
-  async send(_site: Site, tokens: string[], title: string, body: string) {
+  async send(_site: Site, tokens: string[], title: string, body: string, data?: Record<string, string>) {
     if (!tokens.length) return [];
     const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(config.expoAccessToken ? { Authorization: 'Bearer ' + config.expoAccessToken } : {}) },
-      body: JSON.stringify(tokens.map((to) => ({ to, title, body, sound: 'default', priority: 'high' }))),
+      body: JSON.stringify(tokens.map((to) => ({ to, title, body, data, sound: 'default', priority: 'high' }))),
     });
     if (!res.ok) return [];
     const json = (await res.json()) as { data?: { status: string; details?: { error?: string } }[] };
@@ -29,13 +29,17 @@ export class ExpoPushSender implements PushSender {
   }
 }
 
-function pushText(site: Site, ev: MemberEvent): { title: string; body: string } | null {
+// url is the app screen a tap opens.
+export function pushText(site: Site, ev: MemberEvent): { title: string; body: string; url: string } {
   const title = site.settings.mode === 'sensitive' ? 'New activity' : site.name;
   switch (ev.type) {
-    case 'message': return { title, body: 'You have a new message.' };
-    case 'match': return { title, body: "It's mutual. Say hello!" };
-    case 'access': return ev.status === 'granted' ? { title, body: 'Someone shared private photos with you.' } : { title, body: 'You have a new photo request.' };
-    default: return null; // likes: shown in the app, no push (busy inboxes would never stop buzzing)
+    case 'message': return { title, body: 'You have a new message.', url: '/messages' };
+    case 'match': return { title, body: "It's mutual. Say hello!", url: '/activity' };
+    case 'like': return { title, body: 'Someone liked you.', url: '/activity' };
+    case 'access': return ev.status === 'granted' ? { title, body: 'Someone shared private photos with you.', url: '/me?tab=access' } : { title, body: 'You have a new photo request.', url: '/me?tab=access' };
+    case 'photo': return ev.status === 'approved'
+      ? { title, body: 'Your photo was approved.', url: '/me?tab=photos' }
+      : { title, body: "One of your photos wasn't approved. Open the app to see which.", url: '/me?tab=photos' };
   }
 }
 
@@ -52,12 +56,14 @@ export class PgEventBus implements EventSink {
   }
 
   private async sendPush(site: Site, memberId: string, ev: MemberEvent) {
-    const text = pushText(site, ev);
-    if (!text || !this.push) return;
+    if (!this.push) return;
     try {
       const repo = await this.siteRepo(site.id);
+      const member = await repo.getMember(memberId);
+      if (!member || !wantsPush(member.notify, ev)) return;
+      const text = pushText(site, ev);
       const tokens = (await repo.listPushTokens(memberId)).filter((t) => t.platform !== 'web').map((t) => t.token);
-      const dead = await this.push.send(site, tokens, text.title, text.body);
+      const dead = await this.push.send(site, tokens, text.title, text.body, { url: text.url, type: ev.type });
       for (const t of dead) await repo.deletePushToken(t);
     } catch (e) {
       console.error('[events] push failed', (e as Error).message);

@@ -11,6 +11,14 @@ on:
         type: choice
         options: [dev, prod]
         default: dev
+      seed_demo:
+        description: "Dev only: load placeholder demo sites and members (wipes demo member data)"
+        type: boolean
+        default: false
+      admin_email:
+        description: "Dev only, with demo data: your email, added as Platform Admin so you can sign in"
+        type: string
+        default: ''
 
 permissions:
   id-token: write # sign in to Azure with OIDC, no stored Azure password
@@ -82,12 +90,14 @@ jobs:
         run: |
           az deployment group create -g "$RG" -f infra/main.bicep --name "apps-$TAG" \
             -p env="$ENV" deployApps=true imageTag="$TAG" deployerObjectId="${{ steps.base.outputs.deployer }}" postgresAdminPassword="$PG_PW" \
-               paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" -o none
+               paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" \
+               seedAdminEmail="$ADMIN_EMAIL" -o none
         env:
           PG_PW: ${{ secrets.PG_ADMIN_PASSWORD }}
           PAYPAL_JSON: ${{ secrets.PAYPAL_JSON || '{}' }}
           OAUTH_JSON: ${{ secrets.OAUTH_CLIENTS_JSON || '{}' }}
           EXPO_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
 
       - name: Database migrations
         run: |
@@ -102,5 +112,28 @@ jobs:
           done
           exit 1
 
+      - name: Demo data (dev only, when ticked)
+        if: ${{ inputs.seed_demo && inputs.environment != 'prod' }}
+        run: |
+          job="whatbox-$ENV-seed"
+          exec=$(az containerapp job start -g "$RG" -n "$job" --query name -o tsv)
+          for i in $(seq 1 60); do
+            status=$(az containerapp job execution show -g "$RG" -n "$job" --job-execution-name "$exec" --query properties.status -o tsv)
+            echo "seed: $status"
+            [ "$status" = "Succeeded" ] && exit 0
+            [ "$status" = "Failed" ] && exit 1
+            sleep 10
+          done
+          exit 1
+
       - name: Health check
         run: curl -sf --retry 10 --retry-delay 6 --retry-all-errors "${{ steps.base.outputs.api }}/healthz"
+
+      - name: Addresses
+        run: |
+          {
+            echo "### $ENV is live"
+            echo "- API: ${{ steps.base.outputs.api }}"
+            az containerapp show -g "$RG" -n "whatbox-$ENV-web" --query properties.configuration.ingress.fqdn -o tsv | sed 's|^|- Public site: https://|'
+            az containerapp show -g "$RG" -n "whatbox-$ENV-app" --query properties.configuration.ingress.fqdn -o tsv | sed 's|^|- Member app and admin: https://|'
+          } >> "$GITHUB_STEP_SUMMARY"

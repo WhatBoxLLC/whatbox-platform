@@ -1,7 +1,5 @@
-// WhatBox platform on Azure. One resource group per environment:
-//   dev  -> Nichesoft's subscription while building
-//   prod -> WhatBox's own subscription at go-live
-// Nothing here is tied to either subscription, so the same template moves over unchanged.
+// WhatBox platform on Azure. One resource group per environment (dev, prod), both in
+// WhatBox's own Azure account. Nothing here is tied to a subscription, so it moves unchanged.
 //
 // Deploy in two passes (the GitHub workflow does this):
 //   1. deployApps=false  -> registry, Key Vault, Postgres, Storage, Communication Services
@@ -41,6 +39,9 @@ param expoAccessToken string = ''
 param extraCorsOrigins string = ''
 @description('SMS sender numbers JSON, e.g. {"*":"+18005550100"}, once a number is bought in Communication Services.')
 param acsSmsFromJson string = ''
+
+@description('Dev only: email of a person to add as Platform Admin when the demo seed job runs.')
+param seedAdminEmail string = ''
 
 var prod = env == 'prod'
 var suffix = uniqueString(resourceGroup().id)
@@ -341,6 +342,41 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployApps) {
           command: ['node', '--import', 'tsx', 'scripts/migrate.ts']
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: apiEnv
+        }
+      ]
+    }
+  }
+}
+
+// Dev only: loads placeholder demo sites and members. Wipes demo member data each run.
+// Started by the deploy workflow only when "Load demo data" is ticked. Never created in prod.
+resource seed 'Microsoft.App/jobs@2024-03-01' = if (deployApps && !prod) {
+  name: '${name}-seed'
+  location: location
+  tags: tags
+  identity: { type: 'UserAssigned', userAssignedIdentities: { '${identity.id}': {} } }
+  dependsOn: [acrPull, kvRead]
+  properties: {
+    environmentId: cae.id
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 900
+      replicaRetryLimit: 0
+      manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }
+      registries: registries
+      secrets: apiSecrets
+    }
+    template: {
+      containers: [
+        {
+          name: 'seed'
+          image: '${acr.properties.loginServer}/whatbox-api:${imageTag}'
+          command: ['node', '--import', 'tsx', 'scripts/seed.ts']
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          env: concat(apiEnv, [
+            { name: 'ALLOW_DEMO_SEED', value: 'true' }
+            { name: 'SEED_ADMIN_EMAIL', value: seedAdminEmail }
+          ])
         }
       ]
     }

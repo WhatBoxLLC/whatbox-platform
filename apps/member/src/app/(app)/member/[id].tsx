@@ -2,12 +2,13 @@ import { ApiError, GENDERS, type MemberProfile, type PhotoView } from '@whatbox/
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
+import { awayLabel } from '../../../lib/distance';
 import { useSession } from '../../../lib/session';
 import { Badge, Btn, Card, Chip, ErrorText, Field, H, Icon, Loading, Notice, PhotoTile, relTime, Txt, useTheme, useWide } from '../../../ui/kit';
 
 export default function ProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { api } = useSession();
+  const { api, me } = useSession();
   const t = useTheme();
   const wide = useWide(900);
   const [p, setP] = useState<MemberProfile | null>(null);
@@ -107,7 +108,7 @@ export default function ProfileScreen() {
                   </View>
                 ) : null}
               </View>
-              <Txt sub style={{ marginTop: 6 }}>{p.city}, {p.region}{p.miles !== null ? ` · ${p.miles} miles away` : ''} · {p.online ? 'Online now' : `Active ${relTime(p.lastActiveAt)}`}</Txt>
+              <Txt sub style={{ marginTop: 6 }}>{[p.city, p.region].filter(Boolean).join(', ')}{p.miles !== null ? ` · ${awayLabel(p.miles, me!.member.unitsResolved, true)}` : ''} · {p.online ? 'Online now' : `Active ${relTime(p.lastActiveAt)}`}</Txt>
             </View>
 
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>

@@ -67,6 +67,19 @@ export class PublicController extends SiteScoped {
   }
 }
 
+// Places for sign-up and profile. Signed-in members only, so it can't be used as a free geocoder.
+@Controller('v1/geo')
+export class GeoController extends SiteScoped {
+  constructor(@Inject(PLATFORM) p: Platform) { super(p); }
+  @Get('countries') async countries(@Req() r: Request) { await this.ctx(r); return this.p.geoCountries(); }
+  @Get('search') async search(@Req() r: Request, @Query('country') country?: string, @Query('q') q?: string) {
+    await this.ctx(r); return this.p.geoSearch(country, String(q ?? ''));
+  }
+  @Get('near') async near(@Req() r: Request, @Query('lat') lat: string, @Query('lng') lng: string) {
+    await this.ctx(r); return this.p.geoNear(Number(lat), Number(lng));
+  }
+}
+
 @Controller('v1/me')
 export class MeController extends SiteScoped {
   constructor(@Inject(PLATFORM) p: Platform) { super(p); }
@@ -211,7 +224,7 @@ export class AdminController {
 export function buildModule(platform: Platform) {
   @Global()
   @Module({
-    controllers: [PublicController, MeController, MembersController, SocialController, WebhookController, AdminController],
+    controllers: [PublicController, GeoController, MeController, MembersController, SocialController, WebhookController, AdminController],
     providers: [{ provide: PLATFORM, useValue: platform }],
   })
   class AppModule {}

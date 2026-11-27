@@ -1,11 +1,13 @@
-import { ApiError, type AccessRow, type Member } from '@whatbox/core';
+import { ApiError, DEFAULT_STRICT, GENDERS, type AccessRow, type Gender, type Member, type StrictPrefs } from '@whatbox/core';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useBilling } from '../../lib/billing';
 import { useSession } from '../../lib/session';
 import { FieldsEditor } from '../../ui/FieldsEditor';
-import { Avatar, Badge, Btn, Card, ErrorText, Field, H, Notice, relTime, Segmented, Toggle, Txt, useTheme } from '../../ui/kit';
+import { Avatar, Badge, Btn, Card, ChipPicker, ErrorText, Field, H, Notice, relTime, Segmented, Toggle, Txt, useTheme } from '../../ui/kit';
+import { LocationPicker, type PickedLocation } from '../../ui/LocationPicker';
+import { DISTANCE_STEPS, distanceLabel } from '../../lib/distance';
 import { TIERS, type Tier, type TierPerms, type Units } from '@whatbox/core';
 import { PhotoManager } from '../../ui/PhotoManager';
 
@@ -43,9 +45,14 @@ function ProfileTab() {
   const m = me!.member;
   const [name, setName] = useState(m.displayName);
   const [about, setAbout] = useState(m.about);
-  const [postal, setPostal] = useState(m.postal);
+  const [loc, setLoc] = useState<PickedLocation | null>(null);
+  const [seeking, setSeeking] = useState<Gender[]>(m.seeking);
   const [ageMin, setAgeMin] = useState(String(m.ageMin));
   const [ageMax, setAgeMax] = useState(String(m.ageMax));
+  const [miles, setMiles] = useState<number | null>(m.maxMiles === undefined ? 50 : m.maxMiles);
+  const [strict, setStrict] = useState<StrictPrefs>({ ...DEFAULT_STRICT, ...m.strict });
+  const units = m.unitsResolved;
+  const plural = (v: Gender) => GENDERS.find((g) => g.value === v)!.plural;
   const [fields, setFields] = useState<Member['fields']>(m.fields);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -54,11 +61,20 @@ function ProfileTab() {
     <Card style={{ gap: 20 }}>
       <Field label="Display name" value={name} onChangeText={setName} maxLength={24} />
       <Field label="About me" value={about} onChangeText={setAbout} multiline style={{ minHeight: 120, textAlignVertical: 'top' }} hint="Contact details here are flagged for review." />
+      <LocationPicker current={{ city: m.city, region: m.region, country: m.country, postal: m.postal }} onChange={setLoc} />
+      <H size={18} level={2}>Who you want to meet</H>
+      <Txt sub size={14} style={{ marginTop: -12 }}>Discover and Browse start from these. A hard limit is never crossed. A preferred one widens when you run out of people, and those people are labelled.</Txt>
+      <ChipPicker label="Looking for" multi options={GENDERS.map((g) => g.plural)} value={seeking.map(plural)}
+        onChange={(ls: string[]) => ls.length && setSeeking(ls.map((l) => GENDERS.find((g) => g.plural === l)!.value))} />
+      <Toggle label="Hard limit" value={strict.seeking} onChange={(v) => setStrict({ ...strict, seeking: v })} />
       <View style={{ flexDirection: 'row', gap: 12 }}>
-        <View style={{ flex: 1 }}><Field label="ZIP code" value={postal} onChangeText={setPostal} keyboardType="number-pad" /></View>
-        <View style={{ flex: 1 }}><Field label="Ages from" value={ageMin} onChangeText={setAgeMin} keyboardType="number-pad" /></View>
-        <View style={{ flex: 1 }}><Field label="to" value={ageMax} onChangeText={setAgeMax} keyboardType="number-pad" /></View>
+        <View style={{ flex: 1 }}><Field label="Ages from" value={ageMin} onChangeText={(v) => setAgeMin(v.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" /></View>
+        <View style={{ flex: 1 }}><Field label="to" value={ageMax} onChangeText={(v) => setAgeMax(v.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" /></View>
       </View>
+      <Toggle label="Hard limit" value={strict.age} onChange={(v) => setStrict({ ...strict, age: v })} />
+      <ChipPicker label="Distance" options={DISTANCE_STEPS.map((d) => distanceLabel(d, units))} value={distanceLabel(miles, units)}
+        onChange={(l: string) => setMiles(DISTANCE_STEPS.find((d) => distanceLabel(d, units) === l)!)} />
+      <Toggle label="Hard limit" value={strict.distance} onChange={(v) => setStrict({ ...strict, distance: v })} />
       <H size={18} level={2}>About you on {site.name}</H>
       <FieldsEditor fields={site.fields} value={fields} onChange={setFields} />
       {msg ? <Notice tone="success" icon="check">{msg}</Notice> : null}
@@ -66,7 +82,7 @@ function ProfileTab() {
       <Btn label="Save changes" busy={busy} onPress={async () => {
         setBusy(true); setError(null); setMsg(null);
         try {
-          setMe(await api.updateMe({ displayName: name, about, postal, ageMin: Number(ageMin), ageMax: Number(ageMax), fields }));
+          setMe(await api.updateMe({ displayName: name, about, ...(loc ? { location: loc.input } : {}), seeking, ageMin: Number(ageMin) || m.ageMin, ageMax: Number(ageMax) || m.ageMax, maxMiles: miles, strict, fields }));
           setMsg('Saved.');
         } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not save.'); } finally { setBusy(false); }
       }} />

@@ -1,6 +1,7 @@
 import { DevKeyProvider, type KeyProvider, Platform } from '@whatbox/core';
 import { pool } from './db-pool';
 import { ExpoPushSender, PgEventBus } from './events';
+import { WorldGeo } from './geo';
 import { config } from './config';
 import { PgControlRepo, PgSiteRepo, siteDbName } from './pg-repo';
 import { createPhotoStore } from './photos';
@@ -55,6 +56,7 @@ export function createPlatform() {
     payments: createPaymentGateways(),
     provisioner: new PgSiteProvisioner(),
     allowSelfServeTier: config.allowSelfServeTier && process.env.NODE_ENV !== 'production',
+    geo: new WorldGeo(),
   });
   return { platform, control, photos, events };
 }

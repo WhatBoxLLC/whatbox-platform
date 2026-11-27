@@ -507,3 +507,33 @@ test('genders, multi-select status, exclusive choices and the Other caution', as
   assert.equal(p.cautions.length, 1);
   assert.match(p.cautions[0], /OTHER/);
 });
+
+test('worldwide location: city search, postal, device position snapped to a town', async () => {
+  const mp = await createMemoryPlatform();
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await a.startVerification('email', 'world.member@example.com');
+  a.setToken((await a.verify(s.challengeId, s.devCode!)).token);
+  const hits = await a.geoSearch('GB', 'lon');
+  assert.equal(hits[0].name, 'London');
+  let me = await a.updateMe({ displayName: 'Sam', birthYear: 1990, gender: 'man', seeking: ['woman'], location: { country: 'GB', placeId: hits[0].id }, fields: { hsv_status: ['HSV-1'] } });
+  assert.equal(me.member.city, 'London');
+  assert.equal(me.member.country, 'GB');
+  assert.equal(me.member.unitsResolved, 'imperial');
+  assert.equal(me.member.profileComplete, true);
+  me = await a.updateMe({ location: { country: 'AU', lat: -33.86, lng: 151.21 } });
+  assert.equal(me.member.city, 'Sydney');
+  assert.equal(me.member.lat, -33.8679, 'stores the town, not the device position');
+  await assert.rejects(a.updateMe({ location: { country: 'US', postal: '00000' } }), /postal code/);
+  me = await a.updateMe({ location: { country: 'US', postal: '80202' } });
+  assert.equal(me.member.city, 'Denver');
+});
+
+test('Discover: hard limits stop, preferred limits widen and are labelled', async () => {
+  const { api } = await signIn();
+  await api.updateMe({ ageMin: 60, ageMax: 65, strict: { age: true, distance: true, seeking: true } });
+  assert.equal((await api.discover()).length, 0, 'nobody seeded is 60 to 65');
+  await api.updateMe({ strict: { age: false } });
+  const deck = await api.discover();
+  assert.ok(deck.length > 0);
+  assert.ok(deck.every((c) => c.stretch === 'Outside your age range'));
+});

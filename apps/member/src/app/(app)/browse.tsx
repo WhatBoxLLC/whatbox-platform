@@ -2,14 +2,12 @@ import { GENDERS, type MemberCard, type SearchFilters, type SearchResult } from 
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { awayLabel, DISTANCE_STEPS, distanceLabel } from '../../lib/distance';
 import { useSession } from '../../lib/session';
 import {
   Badge, Btn, Card, Check, ChipPicker, Field, Grid, H, Icon, Loading, PhotoTile, Txt, useTheme, useWide,
 } from '../../ui/kit';
 
-const DIST: { label: string; value: number | null }[] = [
-  { label: '10 mi', value: 10 }, { label: '25 mi', value: 25 }, { label: '50 mi', value: 50 }, { label: '100 mi', value: 100 }, { label: 'Anywhere', value: null },
-];
 const SORTS: { label: string; value: NonNullable<SearchFilters['sort']> }[] = [
   { label: 'Best match', value: 'best' }, { label: 'Recently active', value: 'recent' }, { label: 'Newest', value: 'newest' }, { label: 'Closest', value: 'closest' },
 ];
@@ -19,8 +17,9 @@ export default function Browse() {
   const t = useTheme();
   const wide = useWide(980);
   const { height } = useWindowDimensions();
+  const units = me!.member.unitsResolved;
   const defaults = useCallback((): SearchFilters => ({
-    seeking: me!.member.seeking, ageMin: me!.member.ageMin, ageMax: me!.member.ageMax, withinMiles: 50, withPhoto: true, onlineNow: false, sort: 'best', page: 1, pageSize: 12, fields: {},
+    seeking: me!.member.seeking, ageMin: me!.member.ageMin, ageMax: me!.member.ageMax, withinMiles: me!.member.maxMiles === undefined ? 50 : me!.member.maxMiles, withPhoto: true, onlineNow: false, sort: 'best', page: 1, pageSize: 12, fields: {},
   }), [me]);
   const [filters, setFilters] = useState<SearchFilters>(defaults);
   const [draft, setDraft] = useState(filters);
@@ -67,7 +66,7 @@ export default function Browse() {
           <View style={{ flex: 1 }}><Field label="Age from" keyboardType="number-pad" value={ageFrom} placeholder="18" onChangeText={(v) => setAgeFrom(digits(v))} onSubmitEditing={apply} /></View>
           <View style={{ flex: 1 }}><Field label="to" keyboardType="number-pad" value={ageTo} placeholder="99" onChangeText={(v) => setAgeTo(digits(v))} onSubmitEditing={apply} /></View>
         </View>
-        <ChipPicker label={`Within, of ${me!.member.postal}`} options={DIST.map((d) => d.label)} value={DIST.find((d) => d.value === draft.withinMiles)?.label} onChange={(l: string) => setDraft({ ...draft, withinMiles: DIST.find((d) => d.label === l)!.value })} />
+        <ChipPicker label={`Within, of ${me!.member.city || 'you'}`} options={DISTANCE_STEPS.map((d) => distanceLabel(d, units))} value={distanceLabel(draft.withinMiles ?? null, units)} onChange={(l: string) => setDraft({ ...draft, withinMiles: DISTANCE_STEPS.find((d) => distanceLabel(d, units) === l)! })} />
         <View style={{ gap: 4 }}>
           <Txt bold size={14}>Show only</Txt>
           <Check label="With a photo" value={!!draft.withPhoto} onChange={(v) => setDraft({ ...draft, withPhoto: v })} />
@@ -139,7 +138,8 @@ export default function Browse() {
 }
 
 function PersonCard({ p, width, onLiked }: { p: MemberCard; width: any; onLiked: (v: boolean) => void }) {
-  const { api } = useSession();
+  const { api, me } = useSession();
+  const units = me!.member.unitsResolved;
   const t = useTheme();
   return (
     <View style={{ width, backgroundColor: t.surface, borderWidth: 1, borderColor: t.line, borderRadius: 18, overflow: 'hidden' }}>
@@ -164,7 +164,7 @@ function PersonCard({ p, width, onLiked }: { p: MemberCard; width: any; onLiked:
             <Icon name="heart" size={20} color={t.alert} stroke={2.2} />
           </Pressable>
         </View>
-        <Txt sub size={14}>{p.city}{p.miles !== null ? ` · ${p.miles} mi` : ''}</Txt>
+        <Txt sub size={14}>{p.city}{p.miles !== null ? ` · ${awayLabel(p.miles, units)}` : ''}</Txt>
         <Txt size={14} numberOfLines={1} style={{ marginTop: 2 }}>{p.headline}</Txt>
       </View>
     </View>

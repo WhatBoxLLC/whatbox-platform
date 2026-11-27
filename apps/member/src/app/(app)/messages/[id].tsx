@@ -7,7 +7,7 @@ import { Avatar, Btn, clockTime, ErrorText, fonts, Icon, Loading, Notice, Txt, u
 
 export default function Conversation() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { api, refreshUnread } = useSession();
+  const { api, refreshUnread, onEvent } = useSession();
   const t = useTheme();
   const [c, setC] = useState<ConversationView | null>(null);
   const [body, setBody] = useState('');
@@ -20,6 +20,8 @@ export default function Conversation() {
     try { setC(await api.conversation(id)); refreshUnread(); } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not load.'); }
   }, [api, id, refreshUnread]);
   useEffect(() => { load(); }, [load]);
+  // New message from this person while the thread is open
+  useEffect(() => onEvent((ev) => { if (ev.type === 'message' && ev.fromId === id) load(); }), [onEvent, id, load]);
   useEffect(() => { setTimeout(() => scroll.current?.scrollToEnd({ animated: false }), 30); }, [c?.messages.length]);
 
   async function send() {

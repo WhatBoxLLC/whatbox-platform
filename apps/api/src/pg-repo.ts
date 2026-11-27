@@ -2,7 +2,7 @@
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
   AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Favorite, Like, Pass, Member, MemberQuery, MemberSession,
-  Message, ModerationItem, Photo, PrivateAccess, Report, ReviewStatus, Site, SiteRepo, VerificationChallenge, View,
+  Message, ModerationItem, Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, SiteRepo, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
 
@@ -169,6 +169,17 @@ export class PgSiteRepo implements SiteRepo {
       [l.fromId, l.toId, l.at, !!l.vip],
     );
   }
+  async savePushToken(t: PushToken) {
+    await this.db.query(
+      'INSERT INTO push_tokens (token, member_id, platform, at) VALUES ($1,$2,$3,$4) ON CONFLICT (token) DO UPDATE SET member_id=$2, platform=$3, at=$4',
+      [t.token, t.memberId, t.platform, t.at],
+    );
+  }
+  async listPushTokens(id: string) {
+    return (await this.db.query('SELECT * FROM push_tokens WHERE member_id=$1', [id])).rows
+      .map((r: any): PushToken => ({ token: r.token, memberId: r.member_id, platform: r.platform, at: iso(r.at) }));
+  }
+  async deletePushToken(token: string) { await this.db.query('DELETE FROM push_tokens WHERE token=$1', [token]); }
   async setFavorite(f: Favorite, on: boolean) {
     if (on) await this.db.query('INSERT INTO favorites (from_id,to_id,at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [f.fromId, f.toId, f.at]);
     else await this.db.query('DELETE FROM favorites WHERE from_id=$1 AND to_id=$2', [f.fromId, f.toId]);

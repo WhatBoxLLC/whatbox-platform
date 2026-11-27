@@ -3,6 +3,7 @@ export * from './rules';
 export * from './crypto';
 export * from './geo';
 export * from './repo';
+export * from './events';
 export * from './memory-repo';
 export * from './services';
 export * from './api';

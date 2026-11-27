@@ -6,10 +6,11 @@ import { useSession } from '../../../lib/session';
 import { Avatar, Badge, Card, H, Icon, Loading, relTime, Txt, useTheme } from '../../../ui/kit';
 
 export default function Messages() {
-  const { api } = useSession();
+  const { api, onEvent } = useSession();
   const t = useTheme();
   const [list, setList] = useState<ConversationSummary[] | null>(null);
   useEffect(() => { api.conversations().then(setList); }, [api]);
+  useEffect(() => onEvent((ev) => { if (ev.type === 'message') api.conversations().then(setList); }), [api, onEvent]);
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
       <View style={{ maxWidth: 760, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingTop: 24, gap: 16 }}>

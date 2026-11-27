@@ -1,8 +1,8 @@
 // Storage interfaces. The API implements these on PostgreSQL (one database per site plus
 // a control database); the clickable preview implements them in memory.
 import type {
-  AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
-  Photo, PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
+  AdminUser, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
+  Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
 export interface AdminSession { token: string; adminId: string; expiresAt: string }
@@ -105,6 +105,11 @@ export interface SiteRepo {
   getSession(token: string): Promise<MemberSession | null>;
   deleteSession(token: string): Promise<void>;
 
+  // push notification tokens
+  savePushToken(t: PushToken): Promise<void>;
+  listPushTokens(memberId: string): Promise<PushToken[]>;
+  deletePushToken(token: string): Promise<void>;
+
   // admin stats
   stats(nowIso: string): Promise<{
     members: number; activeToday: number; newThisWeek: number; paid: number; messagesToday: number;
@@ -127,6 +132,11 @@ export interface PhotoStore {
 // Verifies an Apple or Google ID token for one site (its own client IDs) and returns the stable user id.
 export interface IdTokenVerifier {
   verify(site: Site, provider: 'apple' | 'google', idToken: string): Promise<{ sub: string; email?: string; emailVerified: boolean }>;
+}
+
+// Fans events out to open app sessions (and, in the API, to push notifications).
+export interface EventSink {
+  emit(site: Site, memberId: string, event: MemberEvent): void;
 }
 
 export interface Clock { now(): Date }

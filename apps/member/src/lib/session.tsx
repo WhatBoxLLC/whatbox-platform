@@ -1,5 +1,6 @@
-import type { MemberApi, MyProfile, PublicSite } from '@whatbox/core';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import type { MemberApi, MemberEvent, MyProfile, PublicSite } from '@whatbox/core';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { registerForPush } from './push';
 import { Platform } from 'react-native';
 import { DEFAULT_SITE, memberApi } from './backend';
 import { storage } from './storage';
@@ -18,6 +19,7 @@ interface SessionState {
   switchSite(key: string): Promise<void>;
   unread: number;
   refreshUnread(): void;
+  onEvent(fn: (ev: MemberEvent) => void): () => void; // live updates for screens
 }
 
 const Ctx = createContext<SessionState | null>(null);
@@ -40,6 +42,19 @@ export function SessionProvider({ children, fallback }: { children: ReactNode; f
   const [signedIn, setSignedIn] = useState(false);
   const [unread, setUnread] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const listeners = useRef(new Set<(ev: MemberEvent) => void>());
+
+  // One live stream per signed-in session; screens listen through onEvent.
+  const live = signedIn && !!me?.member.profileComplete;
+  useEffect(() => {
+    if (!api || !live) return;
+    const off = api.subscribe((ev) => {
+      if (ev.type === 'message') api.unreadCount().then(setUnread).catch(() => {});
+      for (const fn of listeners.current) fn(ev);
+    });
+    registerForPush(api).catch(() => {});
+    return off;
+  }, [api, live]);
 
   const load = useCallback(async (key: string) => {
     try {
@@ -96,6 +111,7 @@ export function SessionProvider({ children, fallback }: { children: ReactNode; f
         await load(key);
       },
       refreshUnread() { api.unreadCount().then(setUnread).catch(() => {}); },
+      onEvent(fn) { listeners.current.add(fn); return () => { listeners.current.delete(fn); }; },
     };
   }, [api, site, siteKey, me, signedIn, unread, load]);
 

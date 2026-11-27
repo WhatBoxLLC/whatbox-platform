@@ -7,7 +7,7 @@ import { createPlatform } from './db';
 import { LocalPhotoStore } from './photos';
 
 async function main() {
-  const { platform, photos } = createPlatform();
+  const { platform, photos, events } = createPlatform();
   const app = await NestFactory.create(buildModule(platform), { bodyParser: false, logger: ['error', 'warn', 'log'] });
   app.use(json({ limit: config.photoStore === 'inline' ? '8mb' : '256kb' }));
   app.useGlobalFilters(new ErrorFilter());
@@ -15,6 +15,31 @@ async function main() {
   const http = app.getHttpAdapter().getInstance() as import('express').Express;
   http.set('trust proxy', true);
   http.disable('x-powered-by');
+  // Live events (server-sent events). Clients connect with their normal session header.
+  http.get('/v1/events', async (req, res) => {
+    let site, ctx;
+    try {
+      site = await platform.resolveSite((req.headers['x-site'] as string) || req.hostname);
+      const auth = req.headers.authorization;
+      ctx = await platform.memberCtx(site, auth?.startsWith('Bearer ') ? auth.slice(7) : undefined, 'web');
+      await events.ensureListening(site);
+    } catch (e) {
+      const status = (e as { status?: number }).status ?? 500;
+      res.status(status === 403 ? 403 : status === 404 ? 404 : 401).json({ code: 'signed_out', message: 'Please sign in.' });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    res.write(': connected\n\n');
+    const token = req.headers.authorization!.slice(7);
+    const off = events.hub.subscribe(site.id, ctx.me.id, (ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`));
+    const beat = setInterval(() => res.write(': hb\n\n'), 25_000);
+    // Close streams whose session was signed out, deleted or suspended.
+    const check = setInterval(async () => {
+      try { await platform.memberCtx(site, token, 'web'); } catch { res.end(); }
+    }, 5 * 60_000);
+    req.on('close', () => { off(); clearInterval(beat); clearInterval(check); });
+  });
+
   if (photos instanceof LocalPhotoStore) {
     // Dev only: serves signed photo URLs from disk. In Azure, browsers fetch from Blob storage directly.
     http.get('/files/:slug/:member/:photo', async (req, res) => {

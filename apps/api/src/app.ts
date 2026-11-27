@@ -87,6 +87,10 @@ export class MeController extends SiteScoped {
     return this.p.updatePhoto(await this.ctx(r), id, { kind: b.kind, rating: b.rating });
   }
   @Delete('photos/:id') async delPhoto(@Req() r: Request, @Param('id') id: string) { return this.p.deletePhoto(await this.ctx(r), id); }
+  @Post('push') async push(@Req() r: Request, @Body() b: { token?: string; platform?: string }) {
+    const pf = b.platform === 'ios' || b.platform === 'android' ? b.platform : 'web';
+    return this.p.registerPush(await this.ctx(r), String(b.token ?? ''), pf);
+  }
   @Post('delete') async del(@Req() r: Request, @Body() b: { confirm?: string }) { return this.p.deleteAccount(await this.ctx(r), String(b.confirm ?? '')); }
   @Post('tier') async tier(@Req() r: Request, @Body() b: { tier: Tier }) { return this.p.setTier(await this.ctx(r), b.tier); }
   @Get('private-access') async access(@Req() r: Request) { return this.p.accessLists(await this.ctx(r)); }

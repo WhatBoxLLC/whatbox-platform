@@ -4,6 +4,7 @@ import { MemoryControlRepo, MemorySiteRepo, type ControlSnapshot, type SiteSnaps
 import type { Clock, IdTokenVerifier, Notifier } from './repo';
 import { DEMO_MEMBER_EMAIL, seedAdmins, seedSite, seedSites } from './seed';
 import { Platform } from './services';
+import { LocalEventHub } from './events';
 
 export interface MemoryPlatformSnapshot { v: 1; control: ControlSnapshot; sites: Record<string, SiteSnapshot> }
 
@@ -55,7 +56,7 @@ export async function createMemoryPlatform(opts: {
       if (!r) { r = new MemorySiteRepo(); sites.set(id, r); }
       return r;
     },
-    keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange, rateLimitScale: opts.rateLimitScale, idTokens: opts.idTokens,
+    keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange, rateLimitScale: opts.rateLimitScale, idTokens: opts.idTokens, events: new LocalEventHub(),
   });
 
   return {

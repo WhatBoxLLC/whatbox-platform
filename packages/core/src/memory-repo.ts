@@ -4,7 +4,7 @@
 import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
 import type {
   AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
-  PrivateAccess, Report, ReviewStatus, Site, VerificationChallenge, View,
+  PrivateAccess, PushToken, Report, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -58,7 +58,7 @@ export interface SiteSnapshot {
   members: Member[]; photos: Photo[]; access: PrivateAccess[]; likes: Like[]; views: View[];
   blocks: Block[]; passes: Pass[]; favorites: Favorite[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
   moderation: ModerationItem[]; pages: ContentPage[]; challenges: VerificationChallenge[];
-  sessions: MemberSession[];
+  sessions: MemberSession[]; push?: PushToken[];
 }
 
 export class MemorySiteRepo implements SiteRepo {
@@ -232,6 +232,12 @@ export class MemorySiteRepo implements SiteRepo {
   async saveSession(s: MemberSession) { this.d.sessions.push(clone(s)); }
   async getSession(t: string) { return clone(this.d.sessions.find((s) => s.token === t) ?? null); }
   async deleteSession(t: string) { this.d.sessions = this.d.sessions.filter((s) => s.token !== t); }
+
+  async savePushToken(t: PushToken) {
+    this.d.push = (this.d.push ?? []).filter((x) => x.token !== t.token).concat(clone(t));
+  }
+  async listPushTokens(id: string) { return clone((this.d.push ?? []).filter((x) => x.memberId === id)); }
+  async deletePushToken(token: string) { this.d.push = (this.d.push ?? []).filter((x) => x.token !== token); }
 
   async stats(nowIso: string) {
     const now = Date.parse(nowIso);

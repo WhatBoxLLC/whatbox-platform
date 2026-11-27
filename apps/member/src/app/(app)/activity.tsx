@@ -34,6 +34,8 @@ export default function Activity() {
     setLists({ likes, views, mine, favorites });
   }, [api]);
   useEffect(() => { load(); }, [load, tier, me?.paywallEnabled]);
+  const { onEvent } = useSession();
+  useEffect(() => onEvent((ev) => { if (ev.type === 'like' || ev.type === 'match') load(); }), [onEvent, load]);
 
   const list = lists[kind];
   const shown = useMemo(() => {

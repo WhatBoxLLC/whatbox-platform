@@ -1,15 +1,16 @@
 // The platform's use cases. Both the HTTP API and the in-browser preview call these,
 // so the rules a member hits are the same everywhere.
+import { LocalEventHub } from './events';
 import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { lookupPostal } from './geo';
-import type { ControlRepo, Clock, IdTokenVerifier, Notifier, PhotoStore, SiteRepo } from './repo';
+import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PhotoStore, SiteRepo } from './repo';
 import { systemClock } from './repo';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
 } from './rules';
 import type {
-  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
+  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, MemberEvent, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
   SiteSettings, SiteStats, SiteTheme,
@@ -22,6 +23,7 @@ export interface PlatformDeps {
   notifier: Notifier;
   photos?: PhotoStore; // absent in the preview, which keeps data URIs
   idTokens?: IdTokenVerifier; // Apple and Google sign-in; absent where not configured
+  events?: EventSink;
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
   rateLimitScale?: number; // multiplies every rate limit; >1 only for local dev and test runs
@@ -492,6 +494,7 @@ export class Platform {
       throw new RuleError('access_closed', 'This member has not shared their private photos with you.');
     }
     await ctx.repo.saveAccess({ ownerId, viewerId: ctx.me.id, status: 'requested', updatedAt: this.iso() });
+    this.emit(ctx, ownerId, { type: 'access', otherId: ctx.me.id, status: 'requested' });
     this.changed();
     return 'requested' as const;
   }
@@ -501,6 +504,7 @@ export class Platform {
     if (action !== 'grant' && !existing) throw new RuleError('not_found', 'No request from this member.', 404);
     const status: AccessStatus = action === 'grant' ? 'granted' : action === 'deny' ? 'denied' : 'revoked';
     await ctx.repo.saveAccess({ ownerId: ctx.me.id, viewerId, status, updatedAt: this.iso() });
+    if (status === 'granted') this.emit(ctx, viewerId, { type: 'access', otherId: ctx.me.id, status: 'granted' });
     this.changed();
     return this.accessLists(ctx);
   }
@@ -631,6 +635,10 @@ export class Platform {
     else await ctx.repo.removeLike(ctx.me.id, id);
     this.changed();
     const mutual = on && (await ctx.repo.listLikesFrom(id)).some((l) => l.toId === ctx.me.id);
+    if (on) {
+      if (mutual) { this.emit(ctx, id, { type: 'match', otherId: ctx.me.id }); this.emit(ctx, ctx.me.id, { type: 'match', otherId: id }); }
+      else this.emit(ctx, id, { type: 'like', fromId: ctx.me.id, vip });
+    }
     return { liked: on, mutual, vip };
   }
 
@@ -660,6 +668,21 @@ export class Platform {
 
   private canRead(ctx: MemberCtx, msg: Message) {
     return msg.fromId === ctx.me.id || this.perms(ctx).readMessagesFrom.includes(msg.senderTier ?? 'free');
+  }
+
+  // The preview's in-memory hub, so the local client can subscribe without a server.
+  localEvents(): LocalEventHub | undefined {
+    return this.deps.events instanceof LocalEventHub ? this.deps.events : undefined;
+  }
+
+  private emit(ctx: MemberCtx, memberId: string, ev: MemberEvent) {
+    try { this.deps.events?.emit(ctx.site, memberId, ev); } catch { /* delivery is best effort */ }
+  }
+
+  async registerPush(ctx: MemberCtx, token: string, platform: 'ios' | 'android' | 'web') {
+    if (!/^[\w\[\]:.\-]{10,300}$/.test(token)) throw new RuleError('bad_token', 'Invalid push token.');
+    await ctx.repo.savePushToken({ memberId: ctx.me.id, token, platform, at: this.iso() });
+    return { ok: true };
   }
 
   private units(ctx: MemberCtx): Units {
@@ -936,6 +959,7 @@ export class Platform {
       senderTier: this.tierOf(ctx.me),
     };
     await ctx.repo.saveMessage(msg);
+    if (!screen.hold) this.emit(ctx, other.id, { type: 'message', fromId: ctx.me.id });
     if (screen.hold) {
       await ctx.repo.saveModeration({
         id: randomId('mod_'), kind: 'message', refId: msg.id, memberId: ctx.me.id,

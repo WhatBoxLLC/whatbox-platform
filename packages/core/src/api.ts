@@ -4,7 +4,7 @@
 import { RuleError } from './rules';
 import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
-  ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
+  ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, MemberEvent, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
   SearchResult, Site, SiteMode, SiteStats, Tier,
 } from './types';
@@ -46,6 +46,9 @@ export interface MemberApi {
   block(id: string, on: boolean): Promise<{ blocked: boolean }>;
   report(id: string, reason: string): Promise<{ ok: boolean }>;
   activity(kind: ActivityKind): Promise<ActivityList>;
+  // Live updates while the app is open. Returns an unsubscribe function.
+  subscribe(onEvent: (ev: MemberEvent) => void): () => void;
+  registerPush(token: string, platform: 'ios' | 'android' | 'web'): Promise<{ ok: boolean }>;
   favorite(id: string, on: boolean): Promise<{ favorite: boolean }>;
   deleteAccount(confirm: string): Promise<{ deleted: boolean }>;
   signInWithProvider(provider: 'apple' | 'google', idToken: string): Promise<{ token: string; isNew: boolean }>;
@@ -117,6 +120,16 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     report: (id, r) => wrap(async () => platform.report(await ctx(), id, r)),
     activity: (k) => wrap(async () => platform.activity(await ctx(), k)),
     favorite: (id, on) => wrap(async () => platform.favorite(await ctx(), id, on)),
+    subscribe: (onEvent) => {
+      let off: (() => void) | null = null;
+      let closed = false;
+      ctx().then((c) => {
+        const hub = platform.localEvents();
+        if (!closed && hub) off = hub.subscribe(c.site.id, c.me.id, onEvent);
+      }).catch(() => {});
+      return () => { closed = true; off?.(); };
+    },
+    registerPush: (t, p) => wrap(async () => platform.registerPush(await ctx(), t, p)),
     deleteAccount: (c) => wrap(async () => { const r = await platform.deleteAccount(await ctx(), c); token = null; return r; }),
     signInWithProvider: (p, t) => wrap(async () => platform.signInWithProvider(await site(), p, t)),
     conversations: () => wrap(async () => platform.conversations(await ctx())),

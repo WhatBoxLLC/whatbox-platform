@@ -1,6 +1,6 @@
 // HTTP implementation of the client contract, talking to apps/api.
 import { ApiError, type AdminApi, type MemberApi } from './api';
-import type { ClientPlatform } from './types';
+import type { ClientPlatform, MemberEvent } from './types';
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -17,6 +17,50 @@ function makeRequest(baseUrl: string, headers: () => Record<string, string>) {
     if (!res.ok) throw new ApiError(data?.code ?? 'http_' + res.status, data?.message ?? res.statusText, res.status);
     return data as T;
   };
+}
+
+// Server-sent events over XMLHttpRequest: works in browsers and React Native alike, and unlike
+// EventSource it can send the Authorization header. Reconnects with backoff until unsubscribed.
+function streamEvents(url: string, headers: () => Record<string, string>, onEvent: (ev: MemberEvent) => void): () => void {
+  let xhr: XMLHttpRequest | null = null;
+  let stopped = false;
+  let retry = 1000;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const connect = () => {
+    if (stopped) return;
+    let seen = 0;
+    let buf = '';
+    xhr = new XMLHttpRequest();
+    xhr.open('GET', url);
+    for (const [k, v] of Object.entries(headers())) xhr.setRequestHeader(k, v);
+    xhr.setRequestHeader('Accept', 'text/event-stream');
+    xhr.onprogress = () => {
+      const text = xhr!.responseText;
+      buf += text.slice(seen);
+      seen = text.length;
+      let i: number;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = chunk.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+        if (data) { retry = 1000; try { onEvent(JSON.parse(data)); } catch { /* ignore malformed */ } }
+      }
+      // long-lived streams: start fresh before the buffer grows large
+      if (seen > 1_000_000) xhr!.abort();
+    };
+    const again = () => {
+      if (stopped) return;
+      if (xhr && xhr.status === 401) { stopped = true; return; }
+      timer = setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 30_000);
+    };
+    xhr.onerror = again;
+    xhr.onload = again; // server closed the stream
+    xhr.onabort = again;
+    xhr.send();
+  };
+  connect();
+  return () => { stopped = true; if (timer) clearTimeout(timer); xhr?.abort(); };
 }
 
 const qs = (o: Record<string, unknown>) =>
@@ -64,6 +108,13 @@ export function createHttpMemberApi(baseUrl: string, siteKey: string, platform: 
     block: (id, on) => req(on ? 'POST' : 'DELETE', `/v1/members/${id}/block`),
     report: (id, reason) => req('POST', `/v1/members/${id}/report`, { reason }),
     activity: (kind) => req('GET', '/v1/activity/' + kind),
+    subscribe: (onEvent) => {
+      if (typeof XMLHttpRequest === 'undefined' || !token) return () => {};
+      return streamEvents(baseUrl.replace(/\/$/, '') + '/v1/events', () => ({
+        'X-Site': siteKey, 'X-Client-Platform': platform, ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      }), onEvent);
+    },
+    registerPush: (t, p) => req('POST', '/v1/me/push', { token: t, platform: p }),
     favorite: (id, on) => req(on ? 'POST' : 'DELETE', `/v1/members/${id}/favorite`),
     deleteAccount: async (confirm) => { const r = await req<{ deleted: boolean }>('POST', '/v1/me/delete', { confirm }); token = null; return r; },
     signInWithProvider: (provider, idToken) => req('POST', '/v1/auth/provider', { provider, idToken }),

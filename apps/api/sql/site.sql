@@ -138,3 +138,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   member_id   text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
   expires_at  timestamptz NOT NULL
 );
+
+-- Expo push tokens (APNs / FCM behind them). Notifications never include message text or names.
+CREATE TABLE IF NOT EXISTS push_tokens (
+  token      text PRIMARY KEY,
+  member_id  text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  platform   text NOT NULL,
+  at         timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS push_member_idx ON push_tokens (member_id);

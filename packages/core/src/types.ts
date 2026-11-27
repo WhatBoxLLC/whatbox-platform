@@ -346,6 +346,15 @@ export interface ActivityList {
   upgradeLabel: string;
 }
 
+// Real-time events. Content-free on purpose: they say something happened, never what.
+export type MemberEvent =
+  | { type: 'message'; fromId: string }
+  | { type: 'like'; fromId: string; vip: boolean }
+  | { type: 'match'; otherId: string }
+  | { type: 'access'; otherId: string; status: 'requested' | 'granted' };
+
+export interface PushToken { memberId: string; token: string; platform: 'ios' | 'android' | 'web'; at: string }
+
 export interface PublicSite {
   id: string;
   slug: string;

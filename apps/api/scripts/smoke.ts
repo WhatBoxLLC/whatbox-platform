@@ -23,6 +23,35 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   assert.equal(prof.privatePhotos[0].placeholder, 'locked');
   assert.equal(await api.requestAccess(rosa.id), 'requested');
 
+  // Live events: a stream opened on a second API instance (if running) sees a message sent through the first
+  const streamBase = process.env.API_URL_2 ?? base;
+  const ctl = new AbortController();
+  const got: unknown[] = [];
+  const stream = await fetch(streamBase + '/v1/events', { headers: { 'X-Site': 'afterh', Authorization: 'Bearer ' + token }, signal: ctl.signal });
+  assert.equal(stream.status, 200);
+  const reader = stream.body!.getReader();
+  const pump = (async () => {
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true }));
+      if (done) return;
+      buf += dec.decode(value);
+      for (const m of buf.matchAll(/data: (.+)\n\n/g)) got.push(JSON.parse(m[1]));
+      buf = buf.slice(buf.lastIndexOf('\n\n') + 2);
+    }
+  })();
+  // Alex likes someone who already liked him -> match event to Alex
+  const likers = await api.activity('likes');
+  const liker = likers.people.find((p) => !p.likedBack)!;
+  await api.like(liker.id, true);
+  for (let i = 0; i < 30 && !got.length; i++) await new Promise((r) => setTimeout(r, 100));
+  ctl.abort();
+  await pump;
+  assert.deepEqual(got[0], { type: 'match', otherId: liker.id }, JSON.stringify(got));
+  await api.like(liker.id, false);
+  assert.equal((await fetch(base + '/v1/events', { headers: { 'X-Site': 'afterh', Authorization: 'Bearer afterh.nope' } })).status, 401);
+
   const likes = await api.activity('likes');
   assert.equal(likes.locked, false); // paywall is off at launch
   assert.equal(likes.total, 12);

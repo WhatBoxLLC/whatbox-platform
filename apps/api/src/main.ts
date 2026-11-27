@@ -49,6 +49,22 @@ async function main() {
       res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' }).send(buf);
     });
   }
+  if (config.paymentsStub && process.env.NODE_ENV !== 'production') {
+    // Dev only: stands in for the processor's approval page.
+    http.get('/dev/checkout', (req, res) => {
+      const q = req.query as Record<string, string>;
+      const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+      const js = (v: unknown) => JSON.stringify(String(v ?? '')).replace(/</g, '\\u003c');
+      const back = /^(https?:|[a-z]+:\/\/)/.test(String(q.return ?? '')) && !/^javascript:/i.test(String(q.return)) ? String(q.return) : '/';
+      res.set('Content-Type', 'text/html').send(`<!doctype html><meta name="viewport" content="width=device-width">
+<title>Test checkout</title><body style="font:16px system-ui;max-width:420px;margin:40px auto;padding:0 16px">
+<h1>Test checkout</h1><p>No money moves. This page stands in for PayPal in local development.</p>
+<p>Plan: <b>${esc(q.tier)}</b></p>
+<button id="ok" style="font-size:16px;padding:10px 18px">Approve</button> <a href="${esc(back)}">Cancel</a>
+<script>document.getElementById('ok').onclick=async()=>{await fetch('/v1/webhooks/stub/'+encodeURIComponent(${js(q.site)}),{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({ref:${js(q.ref)},sub:${js(q.sub)},status:'active',periodEnd:new Date(Date.now()+30*864e5).toISOString()})});location.href=${js(back)};}</script>`);
+    });
+  }
   await app.listen(config.port);
   console.log(`WhatBox API listening on :${config.port}`);
 }

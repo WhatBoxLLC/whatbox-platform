@@ -147,3 +147,26 @@ CREATE TABLE IF NOT EXISTS push_tokens (
   at         timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS push_member_idx ON push_tokens (member_id);
+
+-- Billing. The processor holds the card; we keep only its subscription id and status.
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id           text PRIMARY KEY,
+  member_id    text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  provider     text NOT NULL,
+  provider_ref text NOT NULL DEFAULT '',
+  tier         text NOT NULL,
+  status       text NOT NULL,
+  period_end   timestamptz,
+  created_at   timestamptz NOT NULL,
+  updated_at   timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS subs_member_idx ON subscriptions (member_id);
+CREATE INDEX IF NOT EXISTS subs_ref_idx ON subscriptions (provider, provider_ref);
+
+-- Webhook replay guard: each provider event is applied once.
+CREATE TABLE IF NOT EXISTS webhook_events (
+  provider text NOT NULL,
+  event_id text NOT NULL,
+  at       timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (provider, event_id)
+);

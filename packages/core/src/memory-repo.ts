@@ -1,10 +1,10 @@
 // In-memory repositories. Used by tests and by the browser preview, where state is
 // snapshotted to localStorage. Each site gets its own MemorySiteRepo instance, mirroring
 // the one-database-per-site layout of production.
-import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
+import type { AdminChallenge, AdminSession, ControlRepo, UsageKind, MemberQuery, MemberSession, SiteRepo } from './repo';
 import type {
   AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
-  PrivateAccess, PushToken, Report, ReviewStatus, Site, VerificationChallenge, View,
+  PrivateAccess, PushToken, Report, Subscription, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -45,6 +45,18 @@ export class MemoryControlRepo implements ControlRepo {
   async saveAdminChallenge(c: AdminChallenge) { this.challenges.set(c.id, clone(c)); }
   async getAdminChallenge(id: string) { return clone(this.challenges.get(id) ?? null); }
   async deleteAdminChallenge(id: string) { this.challenges.delete(id); }
+  usage: { siteId: string; kind: UsageKind; qty: number; at: string }[] = [];
+  async recordUsage(siteId: string, kind: UsageKind, qty: number, at: string) { this.usage.push({ siteId, kind, qty, at }); }
+  async usageSummary(since: string) {
+    const m = new Map<string, { siteId: string; kind: UsageKind; qty: number }>();
+    for (const u of this.usage) if (u.at >= since) {
+      const k = u.siteId + '|' + u.kind;
+      const row = m.get(k) ?? { siteId: u.siteId, kind: u.kind, qty: 0 };
+      row.qty += u.qty;
+      m.set(k, row);
+    }
+    return [...m.values()];
+  }
   async hit(key: string, windowSeconds: number, nowIso: string) {
     const window = Math.floor(Date.parse(nowIso) / 1000 / windowSeconds);
     const c = this.counters.get(key);
@@ -58,7 +70,7 @@ export interface SiteSnapshot {
   members: Member[]; photos: Photo[]; access: PrivateAccess[]; likes: Like[]; views: View[];
   blocks: Block[]; passes: Pass[]; favorites: Favorite[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
   moderation: ModerationItem[]; pages: ContentPage[]; challenges: VerificationChallenge[];
-  sessions: MemberSession[]; push?: PushToken[];
+  sessions: MemberSession[]; push?: PushToken[]; subscriptions?: Subscription[];
 }
 
 export class MemorySiteRepo implements SiteRepo {
@@ -104,6 +116,8 @@ export class MemorySiteRepo implements SiteRepo {
     d.reports = d.reports.filter((x) => !pair(x.reporterId, x.targetId));
     d.moderation = d.moderation.filter((x) => x.memberId !== id);
     d.sessions = d.sessions.filter((x) => x.memberId !== id);
+    d.subscriptions = (d.subscriptions ?? []).filter((x) => x.memberId !== id);
+    d.push = (d.push ?? []).filter((x) => x.memberId !== id);
   }
   async saveMember(m: Member) { this.upsert(this.d.members, m, (x) => x.id === m.id); }
   async queryMembers(q: MemberQuery) {
@@ -233,6 +247,21 @@ export class MemorySiteRepo implements SiteRepo {
   async getSession(t: string) { return clone(this.d.sessions.find((s) => s.token === t) ?? null); }
   async deleteSession(t: string) { this.d.sessions = this.d.sessions.filter((s) => s.token !== t); }
 
+  async saveSubscription(s: Subscription) {
+    this.d.subscriptions = (this.d.subscriptions ?? []).filter((x) => x.id !== s.id).concat(clone(s));
+  }
+  async getSubscription(id: string) { return clone((this.d.subscriptions ?? []).find((s) => s.id === id) ?? null); }
+  private seenEvents = new Set<string>();
+  async claimWebhookEvent(provider: string, eventId: string) {
+    const k = provider + ':' + eventId;
+    if (this.seenEvents.has(k)) return false;
+    this.seenEvents.add(k);
+    return true;
+  }
+  async findSubscriptionByRef(provider: string, ref: string) {
+    return clone((this.d.subscriptions ?? []).find((s) => s.provider === provider && s.providerRef === ref) ?? null);
+  }
+  async listSubscriptions(memberId: string) { return clone((this.d.subscriptions ?? []).filter((s) => s.memberId === memberId)); }
   async savePushToken(t: PushToken) {
     this.d.push = (this.d.push ?? []).filter((x) => x.token !== t.token).concat(clone(t));
   }

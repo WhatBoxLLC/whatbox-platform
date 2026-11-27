@@ -54,7 +54,8 @@ export interface SiteSettings {
     messagesPerMinute: number;
     duplicateRecipientThreshold: number; // same text to this many people in 24h is held
   };
-  paymentProvider: 'none' | 'paypal' | 'stripe' | 'ccbill';
+  paymentProvider: PaymentProvider;
+  paymentPlans?: Partial<Record<'paid' | 'vip', string>>; // the provider's plan id for each paid tier
   units: Units; // default for members; each member can override
   discover: {
     newMemberDays: number; // how long a new member gets a visibility boost
@@ -63,6 +64,20 @@ export interface SiteSettings {
 }
 
 export type Units = 'imperial' | 'metric';
+export type PaymentProvider = 'none' | 'paypal' | 'stripe' | 'ccbill';
+
+export type SubscriptionStatus = 'pending' | 'active' | 'past_due' | 'cancelled' | 'expired';
+export interface Subscription {
+  id: string; // ours
+  memberId: string;
+  provider: PaymentProvider | 'stub';
+  providerRef: string; // the provider's subscription id
+  tier: 'paid' | 'vip';
+  status: SubscriptionStatus;
+  currentPeriodEnd?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export type FieldType = 'select' | 'multiselect' | 'text' | 'number' | 'boolean' | 'height'; // height is stored in cm
 
@@ -132,6 +147,7 @@ export interface Member {
   tier: Tier;
   hideExplicit: boolean; // member's own filter for explicit content
   units?: Units; // overrides the site default
+  compTier?: Tier; // granted by an admin; billing never drops a member below it
   identityHashes?: string[]; // HMACs of "apple:<sub>" / "google:<sub>" for social sign-in
   createdAt: string;
   lastActiveAt: string;
@@ -290,10 +306,13 @@ export interface MemberProfile extends MemberCard {
   messageLockReason?: string;
 }
 
+export interface CheckoutStart { checkoutUrl: string; subscriptionId: string }
+
 export interface MyProfile {
   member: Omit<Member, 'emailHash' | 'emailEnc' | 'phoneHash' | 'phoneEnc'> & { contact: string; unitsResolved: Units };
   perms: TierPerms; // what I can do right now (full access while the paywall is off)
   paywallEnabled: boolean;
+  subscription?: { tier: 'paid' | 'vip'; status: SubscriptionStatus; currentPeriodEnd?: string; provider: string };
   photos: PhotoView[];
   limits: { main: number; public: number; private: number };
 }

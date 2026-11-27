@@ -26,6 +26,9 @@ export const config = {
   fileUrlSecret: process.env.FILE_URL_SECRET ?? '',
   azureStorageAccount: process.env.AZURE_STORAGE_ACCOUNT ?? '',
   azureStorageKey: process.env.AZURE_STORAGE_KEY ?? '',
+  paypalJson: process.env.PAYPAL_JSON ?? '', // per-site PayPal REST credentials (from Key Vault)
+  paymentsStub: process.env.PAYMENTS_STUB === 'true', // dev only: pretend processor with a /dev/checkout page
+  allowSelfServeTier: process.env.ALLOW_SELF_SERVE_TIER === 'true', // dev only: switch tier without paying
   azureStorageJson: process.env.AZURE_STORAGE_JSON ?? '', // optional storage account per site
 };
 

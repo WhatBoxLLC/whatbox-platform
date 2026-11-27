@@ -65,6 +65,23 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   assert.equal((await api.setTier('vip')).member.tier, 'vip');
   assert.equal((await api.like(deck[2].id, true)).vip, true);
   await api.setTier('free');
+
+  // Checkout through the dev stub processor: nothing changes until its webhook says so.
+  const co = await api.checkout('paid', { returnUrl: 'http://localhost:8081/me', cancelUrl: 'http://localhost:8081/me' });
+  await assert.rejects(api.checkout('paid', { returnUrl: 'https://evil.example/x', cancelUrl: 'https://evil.example/x' }));
+  const q = new URL(co.checkoutUrl).searchParams;
+  assert.equal((await api.me()).member.tier, 'free');
+  const page = await fetch(co.checkoutUrl);
+  assert.ok((await page.text()).includes('Test checkout'));
+  const hook = (body: object) => fetch(base + '/v1/webhooks/stub/afterh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await hook({ ref: q.get('ref'), sub: q.get('sub'), status: 'active', periodEnd: new Date(Date.now() + 864e5).toISOString() })).status, 201);
+  let billed = await api.me();
+  assert.equal(billed.member.tier, 'paid');
+  assert.equal(billed.subscription?.status, 'active');
+  billed = await api.cancelSubscription();
+  assert.equal(billed.member.tier, 'paid'); // paid through the end of the period
+  await hook({ ref: q.get('ref'), status: 'expired' });
+  assert.equal((await api.me()).member.tier, 'free');
   assert.match(prof.details.find((d) => d.key === 'height')!.value, /cm/);
 
   const conv = await api.send(rosa.id, 'Text me at 303-555-0142');

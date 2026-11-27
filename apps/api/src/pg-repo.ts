@@ -2,7 +2,7 @@
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
   AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Favorite, Like, Pass, Member, MemberQuery, MemberSession,
-  Message, ModerationItem, Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, SiteRepo, VerificationChallenge, View,
+  Message, ModerationItem, Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, SiteRepo, Subscription, UsageKind, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
 
@@ -58,6 +58,13 @@ export class PgControlRepo implements ControlRepo {
       [key, win],
     );
     return r.rows[0].n as number;
+  }
+  async recordUsage(siteId: string, kind: UsageKind, qty: number, at: string) {
+    await this.db.query('INSERT INTO usage_events (site_id, kind, qty, at) VALUES ($1,$2,$3,$4)', [siteId, kind, qty, at]);
+  }
+  async usageSummary(since: string) {
+    const r = await this.db.query('SELECT site_id, kind, SUM(qty)::int AS qty FROM usage_events WHERE at >= $1 GROUP BY site_id, kind ORDER BY site_id, kind', [since]);
+    return r.rows.map((x: any) => ({ siteId: x.site_id, kind: x.kind as UsageKind, qty: x.qty as number }));
   }
 }
 
@@ -179,6 +186,31 @@ export class PgSiteRepo implements SiteRepo {
     return (await this.db.query('SELECT * FROM push_tokens WHERE member_id=$1', [id])).rows
       .map((r: any): PushToken => ({ token: r.token, memberId: r.member_id, platform: r.platform, at: iso(r.at) }));
   }
+  async saveSubscription(x: Subscription) {
+    await this.db.query(
+      `INSERT INTO subscriptions (id, member_id, provider, provider_ref, tier, status, period_end, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET provider_ref=$4, status=$6, period_end=$7, updated_at=$9`,
+      [x.id, x.memberId, x.provider, x.providerRef, x.tier, x.status, x.currentPeriodEnd ?? null, x.createdAt, x.updatedAt],
+    );
+  }
+  async getSubscription(id: string) {
+    const r = (await this.db.query('SELECT * FROM subscriptions WHERE id=$1', [id])).rows[0];
+    return r ? subRow(r) : null;
+  }
+  async findSubscriptionByRef(provider: string, ref: string) {
+    if (!ref) return null;
+    const r = (await this.db.query('SELECT * FROM subscriptions WHERE provider=$1 AND provider_ref=$2 LIMIT 1', [provider, ref])).rows[0];
+    return r ? subRow(r) : null;
+  }
+  async listSubscriptions(memberId: string) {
+    return (await this.db.query('SELECT * FROM subscriptions WHERE member_id=$1 ORDER BY created_at', [memberId])).rows.map(subRow);
+  }
+  // True the first time an event id is seen.
+  async claimWebhookEvent(provider: string, eventId: string) {
+    const r = await this.db.query('INSERT INTO webhook_events (provider, event_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [provider, eventId]);
+    return r.rowCount === 1;
+  }
   async deletePushToken(token: string) { await this.db.query('DELETE FROM push_tokens WHERE token=$1', [token]); }
   async setFavorite(f: Favorite, on: boolean) {
     if (on) await this.db.query('INSERT INTO favorites (from_id,to_id,at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [f.fromId, f.toId, f.at]);
@@ -297,3 +329,10 @@ export class PgSiteRepo implements SiteRepo {
 
 function iso(v: Date | string) { return new Date(v).toISOString(); }
 function like(r: any): Like { return { fromId: r.from_id, toId: r.to_id, at: iso(r.at), ...(r.vip ? { vip: true } : {}) }; }
+
+function subRow(r: any): Subscription {
+  return {
+    id: r.id, memberId: r.member_id, provider: r.provider, providerRef: r.provider_ref, tier: r.tier, status: r.status,
+    currentPeriodEnd: r.period_end ? iso(r.period_end) : undefined, createdAt: iso(r.created_at), updatedAt: iso(r.updated_at),
+  };
+}

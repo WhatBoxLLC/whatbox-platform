@@ -6,6 +6,7 @@ import { PgControlRepo, PgSiteRepo, siteDbName } from './pg-repo';
 import { createPhotoStore } from './photos';
 import { createNotifier } from './notify';
 import { createIdTokenVerifier } from './idp';
+import { createPaymentGateways } from './payments';
 
 export { pool, closePools } from './db-pool';
 
@@ -50,6 +51,8 @@ export function createPlatform() {
     events,
     exposeDevCodes: config.exposeDevCodes,
     rateLimitScale: config.rateLimitScale,
+    payments: createPaymentGateways(),
+    allowSelfServeTier: config.allowSelfServeTier && process.env.NODE_ENV !== 'production',
   });
   return { platform, control, photos, events };
 }

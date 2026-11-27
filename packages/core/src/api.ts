@@ -32,7 +32,9 @@ export interface MemberApi {
   addPhoto(input: { kind: PhotoKind; rating?: PhotoRating; url?: string; tone?: [string, string] }): Promise<MyProfile>;
   updatePhoto(id: string, patch: { kind?: PhotoKind; rating?: PhotoRating }): Promise<MyProfile>;
   deletePhoto(id: string): Promise<MyProfile>;
-  setTier(tier: Tier): Promise<MyProfile>; // prototype checkout
+  setTier(tier: Tier): Promise<MyProfile>; // preview and dev only
+  checkout(tier: 'paid' | 'vip', urls: { returnUrl: string; cancelUrl: string }): Promise<{ checkoutUrl: string; subscriptionId: string }>;
+  cancelSubscription(): Promise<MyProfile>;
 
   privateAccess(): Promise<{ incoming: AccessRow[]; outgoing: AccessRow[] }>;
   requestAccess(ownerId: string): Promise<'requested' | 'granted'>;
@@ -108,6 +110,8 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     updatePhoto: (id, p) => wrap(async () => platform.updatePhoto(await ctx(), id, p)),
     deletePhoto: (id) => wrap(async () => platform.deletePhoto(await ctx(), id)),
     setTier: (tier) => wrap(async () => platform.setTier(await ctx(), tier)),
+    checkout: (tier, urls) => wrap(async () => platform.startCheckout(await ctx(), tier, urls)),
+    cancelSubscription: () => wrap(async () => platform.cancelSubscription(await ctx())),
     privateAccess: () => wrap(async () => platform.accessLists(await ctx())),
     requestAccess: (id) => wrap(async () => platform.requestAccess(await ctx(), id)),
     decideAccess: (id, a) => wrap(async () => platform.decideAccess(await ctx(), id, a)),

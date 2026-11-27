@@ -5,6 +5,7 @@ import { TONES } from '@whatbox/core';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, View } from 'react-native';
+import { useBilling } from '../../lib/billing';
 import { useSession } from '../../lib/session';
 import { Badge, Btn, Card, Chip, Grid, H, Icon, Loading, Notice, PhotoTile, relTime, Segmented, Silhouette, Txt, useTheme } from '../../ui/kit';
 
@@ -19,7 +20,8 @@ const QUICK: { value: Quick; label: string; test: (p: ActivityPerson) => boolean
 ];
 
 export default function Activity() {
-  const { api, me, setMe, site } = useSession();
+  const { api, me, site } = useSession();
+  const billing = useBilling();
   const t = useTheme();
   const [kind, setKind] = useState<Kind>('likes');
   const [quick, setQuick] = useState<Quick>('all');
@@ -93,8 +95,8 @@ export default function Activity() {
                 </View>
                 {checkout ? (
                   <View style={{ width: '100%', gap: 10 }}>
-                    <Notice tone="warn" title="Prototype checkout">{`No payment is taken. The real build hands off to the site's processor and your statement shows "${site.billingDescriptor}".`}</Notice>
-                    <Btn label={`Confirm ${ms.tiers[checkout].label}`} onPress={async () => { setMe(await api.setTier(checkout)); setCheckout(null); }} />
+                    <Notice tone="warn" title={billing.selfServe ? 'Prototype checkout' : 'Checkout'}>{billing.selfServe ? `No payment is taken. The real build hands off to the site's processor and your statement shows "${site.billingDescriptor}".` : `${ms.tiers[checkout].label} is ${ms.tiers[checkout].priceLabel}. You'll pay on the processor's secure page and your statement shows "${site.billingDescriptor}".`}</Notice>
+                    <Btn label={`Continue to ${ms.tiers[checkout].label}`} onPress={async () => { await billing.upgrade(checkout); setCheckout(null); }} />
                   </View>
                 ) : (
                   <Btn size="sm" label={list.upgradeLabel || `Upgrade to ${ms.tiers[upTier].label}`} onPress={() => setCheckout(upTier)} />

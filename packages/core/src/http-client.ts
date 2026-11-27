@@ -97,6 +97,8 @@ export function createHttpMemberApi(baseUrl: string, siteKey: string, platform: 
     updatePhoto: (id, patch) => req('PATCH', '/v1/me/photos/' + id, patch),
     deletePhoto: (id) => req('DELETE', '/v1/me/photos/' + id),
     setTier: (tier) => req('POST', '/v1/me/tier', { tier }),
+    checkout: (tier, urls) => req('POST', '/v1/me/checkout', { tier, ...urls }),
+    cancelSubscription: () => req('POST', '/v1/me/subscription/cancel', {}),
     privateAccess: () => req('GET', '/v1/me/private-access'),
     requestAccess: (ownerId) => req<{ status: 'requested' | 'granted' }>('POST', `/v1/members/${ownerId}/private-access`).then((r) => r.status),
     decideAccess: (viewerId, action) => req('POST', `/v1/me/private-access/${viewerId}`, { action }),

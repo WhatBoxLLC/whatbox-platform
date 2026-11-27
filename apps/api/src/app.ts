@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { normalizeImage } from './photos';
+import { safeReturnUrl } from './payments';
 import { type ActivityKind, type ClientPlatform, type ContentPage, type PhotoKind, type PhotoRating, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
 import type { Request, Response } from 'express';
 
@@ -93,6 +94,13 @@ export class MeController extends SiteScoped {
   }
   @Post('delete') async del(@Req() r: Request, @Body() b: { confirm?: string }) { return this.p.deleteAccount(await this.ctx(r), String(b.confirm ?? '')); }
   @Post('tier') async tier(@Req() r: Request, @Body() b: { tier: Tier }) { return this.p.setTier(await this.ctx(r), b.tier); }
+  @Post('checkout') async checkout(@Req() r: Request, @Body() b: { tier?: string; returnUrl?: string; cancelUrl?: string }) {
+    const c = await this.ctx(r);
+    const returnUrl = safeReturnUrl(c.site, b.returnUrl), cancelUrl = safeReturnUrl(c.site, b.cancelUrl);
+    if (!returnUrl || !cancelUrl) throw new RuleError('bad_return', 'Return address is not allowed.');
+    return this.p.startCheckout(c, b.tier === 'vip' ? 'vip' : 'paid', { returnUrl, cancelUrl });
+  }
+  @Post('subscription/cancel') async cancelSub(@Req() r: Request) { return this.p.cancelSubscription(await this.ctx(r)); }
   @Get('private-access') async access(@Req() r: Request) { return this.p.accessLists(await this.ctx(r)); }
   @Post('private-access/:viewerId') async decide(@Req() r: Request, @Param('viewerId') v: string, @Body() b: { action: 'grant' | 'deny' | 'revoke' }) {
     return this.p.decideAccess(await this.ctx(r), v, b.action);
@@ -134,6 +142,16 @@ export class SocialController extends SiteScoped {
     return this.p.send(await this.ctx(r), id, String(b.body ?? ''));
   }
   @Post('conversations/:id/share-contact') async share(@Req() r: Request, @Param('id') id: string) { return this.p.shareContact(await this.ctx(r), id); }
+}
+
+// Processors call this. No member auth: the gateway verifies the processor's signature instead.
+@Controller('v1/webhooks')
+export class WebhookController {
+  constructor(@Inject(PLATFORM) private p: Platform) {}
+  @Post(':provider/:site') async hook(@Req() r: Request, @Param('provider') provider: string, @Param('site') slug: string, @Body() b: unknown) {
+    const site = await this.p.resolveSite(slug);
+    return this.p.handlePaymentWebhook(site, provider, r.headers as Record<string, string | undefined>, b, JSON.stringify(b ?? null));
+  }
 }
 
 @Controller('v1/admin')
@@ -184,7 +202,7 @@ export class AdminController {
 export function buildModule(platform: Platform) {
   @Global()
   @Module({
-    controllers: [PublicController, MeController, MembersController, SocialController, AdminController],
+    controllers: [PublicController, MeController, MembersController, SocialController, WebhookController, AdminController],
     providers: [{ provide: PLATFORM, useValue: platform }],
   })
   class AppModule {}

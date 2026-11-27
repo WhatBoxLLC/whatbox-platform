@@ -442,6 +442,7 @@ function Settings({ api, site, onSite, role }: { api: AdminApi; site: Site; onSi
   const [error, setError] = useState<string | null>(null);
   const [accent, setAccent] = useState(site.theme.accent);
   const [descriptor, setDescriptor] = useState(site.settings.billingDescriptor);
+  const [plans, setPlans] = useState({ paid: site.settings.paymentPlans?.paid ?? '', vip: site.settings.paymentPlans?.vip ?? '' });
   const lim = site.settings.messageLimits;
   const [limits, setLimits] = useState({ a: String(lim.newConversationsPerHour), b: String(lim.messagesPerMinute), c: String(lim.duplicateRecipientThreshold) });
   const save = async (patch: Parameters<AdminApi['updateSite']>[1]) => {
@@ -469,6 +470,16 @@ function Settings({ api, site, onSite, role }: { api: AdminApi; site: Site; onSi
           </View>
         </>
       ), 'Pricing is by level, the same for every member. Defaults follow the WhatBox plan: Free can browse and reply to VIPs, Paid sees everything, VIP likes go first and anyone can answer VIP messages.')}
+      {section('Payments', (
+        <>
+          <ChipPicker label="Processor" options={['none', 'paypal', 'stripe', 'ccbill']} value={site.settings.paymentProvider} onChange={(v: any) => save({ settings: { paymentProvider: v } })} />
+          <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <View style={{ flex: 1, minWidth: 160 }}><Field label={`${site.settings.membership.tiers.paid.label} plan ID`} value={plans.paid} onChangeText={(v) => setPlans({ ...plans, paid: v })} placeholder="P-..." /></View>
+            <View style={{ flex: 1, minWidth: 160 }}><Field label={`${site.settings.membership.tiers.vip.label} plan ID`} value={plans.vip} onChangeText={(v) => setPlans({ ...plans, vip: v })} placeholder="P-..." /></View>
+            <Btn label="Save plans" size="sm" onPress={() => save({ settings: { paymentPlans: { paid: plans.paid.trim() || undefined, vip: plans.vip.trim() || undefined } } })} />
+          </View>
+        </>
+      ), 'Create one monthly plan per level in your processor account and paste its ID here. Members pay on the processor\'s page; WhatBox never sees card numbers. Merchant credentials are set by WhatBox, not stored here.')}
       {section('Units', (
         <Segmented<'imperial' | 'metric'> value={site.settings.units} onChange={(u) => save({ settings: { units: u } })} options={[
           { value: 'imperial', label: 'Feet and inches' }, { value: 'metric', label: 'Centimeters' },

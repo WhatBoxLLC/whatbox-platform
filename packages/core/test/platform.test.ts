@@ -317,3 +317,57 @@ test('Apple and Google sign-in link by verified email and stay per site', async 
   hf.setToken(r.token);
   await assert.rejects(hf.me());
 });
+
+test('billing: self-serve tier is off outside preview; checkout + webhook sets tier; cancel keeps paid period', async () => {
+  const { StubGateway } = await import('../src/index');
+  const stub = new StubGateway();
+  const mp = await createMemoryPlatform({ allowSelfServeTier: false, payments: { stub } });
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const st = await api.startVerification('email', DEMO_MEMBER_EMAIL);
+  api.setToken((await api.verify(st.challengeId, st.devCode!)).token);
+  await assert.rejects(api.setTier('vip'), (e: ApiError) => e.status === 403);
+  assert.equal((await api.me()).member.tier, 'free');
+
+  const co = await api.checkout('vip', { returnUrl: 'https://x/return', cancelUrl: 'https://x/cancel' });
+  const ref = new URL(co.checkoutUrl, 'https://x').searchParams.get('ref')!;
+  assert.equal((await api.me()).member.tier, 'free'); // nothing until the processor confirms
+  const site = (await mp.control.listSites()).find((s) => s.slug === 'afterh')!;
+  // Unknown refs are ignored, not applied to anyone.
+  assert.deepEqual(await mp.platform.handlePaymentWebhook(site, 'stub', {}, { ref: 'stub_nope', status: 'active' }, ''), { ok: true, ignored: true });
+  const end = new Date(Date.now() + 20 * 86400e3).toISOString();
+  await mp.platform.handlePaymentWebhook(site, 'stub', {}, { ref, status: 'active', periodEnd: end }, '');
+  let me = await api.me();
+  assert.equal(me.member.tier, 'vip');
+  assert.equal(me.subscription?.status, 'active');
+
+  me = await api.cancelSubscription();
+  assert.equal(me.member.tier, 'vip', 'stays VIP until the paid period ends');
+  assert.deepEqual(stub.cancelled, [ref]);
+  await mp.platform.handlePaymentWebhook(site, 'stub', {}, { ref, status: 'expired' }, '');
+  assert.equal((await api.me()).member.tier, 'free');
+});
+
+test('billing: admin comp tier survives an expired subscription', async () => {
+  const { StubGateway } = await import('../src/index');
+  const mp = await createMemoryPlatform({ allowSelfServeTier: false, payments: { stub: new StubGateway() } });
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const st = await api.startVerification('email', DEMO_MEMBER_EMAIL);
+  api.setToken((await api.verify(st.challengeId, st.devCode!)).token);
+  const me = await api.me();
+  const site = (await mp.control.listSites()).find((s) => s.slug === 'afterh')!;
+  await mp.platform.adminSetMemberTier((await mp.control.getAdmin('adm_owner'))!, site.id, me.member.id, 'paid');
+  const co = await api.checkout('vip', { returnUrl: 'r', cancelUrl: 'c' });
+  const ref = new URL(co.checkoutUrl, 'https://x').searchParams.get('ref')!;
+  await mp.platform.handlePaymentWebhook(site, 'stub', {}, { ref, status: 'active' }, '');
+  assert.equal((await api.me()).member.tier, 'vip');
+  await mp.platform.handlePaymentWebhook(site, 'stub', {}, { ref, status: 'expired' }, '');
+  assert.equal((await api.me()).member.tier, 'paid');
+});
+
+test('usage is metered per site for codes', async () => {
+  const mp = await createMemoryPlatform();
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  await api.startVerification('email', 'someone@example.com');
+  const rows = await mp.control.usageSummary('2000-01-01');
+  assert.ok(rows.some((r) => r.kind === 'email' && r.qty >= 1 && r.siteId.includes('afterh')));
+});

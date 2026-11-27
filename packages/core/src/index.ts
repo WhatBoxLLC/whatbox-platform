@@ -10,3 +10,4 @@ export * from './api';
 export * from './http-client';
 export * from './seed';
 export * from './memory-platform';
+export * from './stub-payments';

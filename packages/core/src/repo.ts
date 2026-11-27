@@ -2,7 +2,7 @@
 // a control database); the clickable preview implements them in memory.
 import type {
   AdminUser, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
-  Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, VerificationChallenge, View,
+  Photo, PrivateAccess, PushToken, Report, Subscription, SubscriptionStatus, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
 
 export interface AdminSession { token: string; adminId: string; expiresAt: string }
@@ -24,7 +24,11 @@ export interface ControlRepo {
   deleteAdminChallenge(id: string): Promise<void>;
   // Fixed-window counter shared by every API instance: returns the count including this hit.
   hit(key: string, windowSeconds: number, nowIso: string): Promise<number>;
+  // Metering for licensing: counts only, no content.
+  recordUsage(siteId: string, kind: UsageKind, qty: number, atIso: string): Promise<void>;
+  usageSummary(sinceIso: string): Promise<{ siteId: string; kind: UsageKind; qty: number }[]>;
 }
+export type UsageKind = 'email' | 'sms' | 'storage_mb' | 'push' | 'ai_screen';
 
 // Coarse prefilter. Distance, custom fields, sorting and paging happen in the service.
 export interface MemberQuery {
@@ -105,6 +109,13 @@ export interface SiteRepo {
   getSession(token: string): Promise<MemberSession | null>;
   deleteSession(token: string): Promise<void>;
 
+  // billing
+  saveSubscription(s: Subscription): Promise<void>;
+  getSubscription(id: string): Promise<Subscription | null>;
+  findSubscriptionByRef(provider: string, ref: string): Promise<Subscription | null>;
+  claimWebhookEvent(provider: string, eventId: string): Promise<boolean>; // false if already applied
+  listSubscriptions(memberId: string): Promise<Subscription[]>;
+
   // push notification tokens
   savePushToken(t: PushToken): Promise<void>;
   listPushTokens(memberId: string): Promise<PushToken[]>;
@@ -133,6 +144,16 @@ export interface PhotoStore {
 export interface IdTokenVerifier {
   verify(site: Site, provider: 'apple' | 'google', idToken: string): Promise<{ sub: string; email?: string; emailVerified: boolean }>;
 }
+
+// One per payment provider. Credentials are per site (each owner can bring their own account).
+export interface PaymentGateway {
+  provider: Subscription['provider'];
+  startCheckout(site: Site, a: { subscriptionId: string; memberId: string; tier: 'paid' | 'vip'; planId?: string; returnUrl: string; cancelUrl: string }): Promise<{ checkoutUrl: string; providerRef: string }>;
+  cancel(site: Site, providerRef: string): Promise<void>;
+  // Verifies the webhook really came from the provider, then says what changed.
+  parseWebhook(site: Site, headers: Record<string, string | undefined>, body: unknown, raw: string): Promise<WebhookUpdate | null>;
+}
+export interface WebhookUpdate { providerRef: string; status: SubscriptionStatus; currentPeriodEnd?: string; customId?: string; eventId?: string }
 
 // Fans events out to open app sessions (and, in the API, to push notifications).
 export interface EventSink {

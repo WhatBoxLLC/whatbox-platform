@@ -2,10 +2,11 @@ import { ApiError, type AccessRow, type Member } from '@whatbox/core';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
+import { useBilling } from '../../lib/billing';
 import { useSession } from '../../lib/session';
 import { FieldsEditor } from '../../ui/FieldsEditor';
 import { Avatar, Badge, Btn, Card, ErrorText, Field, H, Notice, relTime, Segmented, Toggle, Txt, useTheme } from '../../ui/kit';
-import { TIERS, type TierPerms, type Units } from '@whatbox/core';
+import { TIERS, type Tier, type TierPerms, type Units } from '@whatbox/core';
 import { PhotoManager } from '../../ui/PhotoManager';
 
 type Tab = 'profile' | 'photos' | 'access' | 'settings';
@@ -116,9 +117,32 @@ function AccessTab() {
 }
 
 function MembershipCard() {
-  const { api, me, setMe, site } = useSession();
+  const { me, site } = useSession();
+  const billing = useBilling();
+  const params = useLocalSearchParams<{ checkout?: string }>();
+  const [note, setNote] = useState<{ tone: 'success' | 'warn'; text: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const ms = site.membership;
   const cur = me!.member.tier ?? 'free';
+  const sub = me!.subscription;
+  useEffect(() => {
+    if (params.checkout === 'cancelled') setNote({ tone: 'warn', text: 'Checkout was cancelled. Nothing was charged.' });
+    if (params.checkout === 'done') {
+      setNote({ tone: 'success', text: 'Thanks! Confirming your payment…' });
+      billing.waitForTier().then((ok) => setNote(ok ? { tone: 'success', text: 'Your membership is active.' } : { tone: 'success', text: 'Payment received. Your plan will switch shortly.' }));
+    }
+  }, [params.checkout]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function choose(tid: Tier) {
+    setBusy(tid); setNote(null);
+    try {
+      const r = await billing.upgrade(tid);
+      if (r === 'cancelled') setNote({ tone: 'warn', text: 'Checkout was cancelled. Nothing was charged.' });
+      if (r === 'pending') setNote({ tone: 'success', text: 'Payment received. Your plan will switch in a moment.' });
+    } catch (e) {
+      setNote({ tone: 'warn', text: e instanceof ApiError ? e.message : 'Checkout did not start. Try again.' });
+    } finally { setBusy(null); }
+  }
+  const canBuy = (tid: Tier) => billing.selfServe || (ms.paywallEnabled && tid !== 'free' && !(sub && (sub.status === 'active' || sub.status === 'past_due')));
   const lines = (tp: TierPerms) => [
     tp.seePublicPhotos ? 'All public photos' : 'Main photo only',
     tp.requestPrivatePhotos ? 'Request private photos' : null,
@@ -137,15 +161,27 @@ function MembershipCard() {
           return (
             <View key={tid} style={{ borderWidth: on ? 2 : 1, borderColor: on ? '#22655F' : '#E4DED5', borderRadius: 14, padding: 12, gap: 4 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <Txt bold>{tp.label}{tp.priceLabel ? ` · ${tp.priceLabel}` : ' · free'}</Txt>
-                {on ? <Badge label="Your plan" /> : <Btn size="sm" kind="secondary" label={`Switch (prototype)`} onPress={async () => setMe(await api.setTier(tid))} />}
+                <Txt bold>{tp.label}{tp.priceLabel ? ` · ${tp.priceLabel}` : tp.label.toLowerCase() === 'free' ? '' : ' · free'}</Txt>
+                {on ? <Badge label="Your plan" /> : canBuy(tid) ? (
+                  <Btn size="sm" kind="secondary" busy={busy === tid} label={billing.selfServe ? 'Switch (prototype)' : `Choose ${tp.label}`} onPress={() => choose(tid)} />
+                ) : null}
               </View>
               <Txt sub size={13}>{lines(tp).join(' · ')}</Txt>
             </View>
           );
         })}
       </View>
-      <Txt sub size={12}>{`Same price for every member. Statements show "${site.billingDescriptor}". The prototype takes no payment.`}</Txt>
+      {note ? <Notice tone={note.tone}>{note.text}</Notice> : null}
+      {sub && !billing.selfServe ? (
+        <View style={{ gap: 6 }}>
+          <Txt sub size={13}>{sub.status === 'cancelled'
+            ? `Cancelled. ${ms.tiers[sub.tier].label} stays on${sub.currentPeriodEnd ? ' until ' + new Date(sub.currentPeriodEnd).toLocaleDateString() : ' to the end of the period'}.`
+            : sub.status === 'past_due' ? 'Your last payment did not go through. Update it with your payment provider.'
+            : `${ms.tiers[sub.tier].label} renews${sub.currentPeriodEnd ? ' on ' + new Date(sub.currentPeriodEnd).toLocaleDateString() : ' monthly'}.`}</Txt>
+          {sub.status === 'active' || sub.status === 'past_due' ? <Btn size="sm" kind="secondary" label="Cancel membership" style={{ alignSelf: 'flex-start' }} busy={busy === 'cancel'} onPress={async () => { setBusy('cancel'); try { await billing.cancel(); } finally { setBusy(null); } }} /> : null}
+        </View>
+      ) : null}
+      <Txt sub size={12}>{`Same price for every member. Statements show "${site.billingDescriptor}".${billing.selfServe ? ' The prototype takes no payment.' : ''}`}</Txt>
     </Card>
   );
 }

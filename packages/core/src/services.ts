@@ -3,14 +3,14 @@
 import { LocalEventHub } from './events';
 import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { lookupPostal } from './geo';
-import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PhotoStore, SiteRepo } from './repo';
+import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteRepo } from './repo';
 import { systemClock } from './repo';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
 } from './rules';
 import type {
-  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, MemberEvent, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
+  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, MemberEvent, Subscription, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
   SiteSettings, SiteStats, SiteTheme,
@@ -24,6 +24,8 @@ export interface PlatformDeps {
   photos?: PhotoStore; // absent in the preview, which keeps data URIs
   idTokens?: IdTokenVerifier; // Apple and Google sign-in; absent where not configured
   events?: EventSink;
+  payments?: Partial<Record<string, PaymentGateway>>; // by provider: paypal, stripe, ccbill, stub
+  allowSelfServeTier?: boolean; // preview and local dev only: switch tier without paying
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
   rateLimitScale?: number; // multiplies every rate limit; >1 only for local dev and test runs
@@ -146,6 +148,7 @@ export class Platform {
       consumed: false,
     });
     await this.deps.notifier.sendCode({ site, channel, target, code });
+    await this.deps.control.recordUsage(site.id, channel === 'phone' ? 'sms' : 'email', 1, this.iso()).catch(() => {});
     this.changed();
     return { challengeId: id, sentTo: maskTarget(channel, target), devCode: this.deps.exposeDevCodes ? code : undefined };
   }
@@ -233,6 +236,9 @@ export class Platform {
   // Permanent: photos, likes, messages, everything. Other members simply stop seeing this person.
   async deleteAccount(ctx: MemberCtx, confirm: string) {
     if (confirm.trim().toUpperCase() !== 'DELETE') throw new RuleError('confirm', 'Type DELETE to confirm.');
+    for (const sub of await ctx.repo.listSubscriptions(ctx.me.id)) {
+      if (sub.status === 'active' || sub.status === 'past_due') await this.deps.payments?.[sub.provider]?.cancel(ctx.site, sub.providerRef).catch(() => {});
+    }
     const photos = await ctx.repo.listPhotos(ctx.me.id);
     for (const p of photos) if (p.blobKey) await this.deps.photos?.delete(ctx.site, p.blobKey);
     await ctx.repo.deleteMember(ctx.me.id);
@@ -351,6 +357,7 @@ export class Platform {
         unitsResolved: this.units(ctx),
       },
       perms: this.perms(ctx), paywallEnabled: ctx.site.settings.membership.paywallEnabled,
+      subscription: await this.currentSub(ctx),
       photos: photos.map((p) => this.photoView(ctx, p, { owner: true })),
       limits: PHOTO_LIMITS,
     };
@@ -431,6 +438,7 @@ export class Platform {
       if (input.file.data.byteLength > PHOTO_MAX_BYTES) throw new RuleError('too_big', 'Photos can be up to 10 MB.', 413);
       blobKey = `${ctx.me.id}/${id}`;
       await this.deps.photos.put(ctx.site, blobKey, input.file.data, input.file.contentType);
+      await this.deps.control.recordUsage(ctx.site.id, 'storage_mb', Math.max(1, Math.ceil(input.file.data.byteLength / 1_048_576)), this.iso()).catch(() => {});
     } else if (this.deps.photos && input.url) {
       throw new RuleError('upload_required', 'Upload the photo file.', 400);
     }
@@ -675,6 +683,13 @@ export class Platform {
     return this.deps.events instanceof LocalEventHub ? this.deps.events : undefined;
   }
 
+  private async currentSub(ctx: MemberCtx) {
+    const subs = (await ctx.repo.listSubscriptions(ctx.me.id)).filter((s) => s.status !== 'pending' && s.status !== 'expired')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const s = subs[0];
+    return s ? { tier: s.tier, status: s.status, currentPeriodEnd: s.currentPeriodEnd, provider: s.provider } : undefined;
+  }
+
   private emit(ctx: MemberCtx, memberId: string, ev: MemberEvent) {
     try { this.deps.events?.emit(ctx.site, memberId, ev); } catch { /* delivery is best effort */ }
   }
@@ -820,14 +835,93 @@ export class Platform {
     };
   }
 
-  // Stub checkout. The real build hands off to the site's payment provider and sets the tier on its webhook.
+  // Preview and dev only. Real members change tier through checkout and the provider's webhook.
   async setTier(ctx: MemberCtx, tier: Tier) {
+    if (!this.deps.allowSelfServeTier) throw new RuleError('forbidden', 'Upgrade through checkout.', 403);
     if (!['free', 'paid', 'vip'].includes(tier)) throw new RuleError('bad_tier', 'Unknown membership level.');
     ctx.me.tier = tier;
     delete (ctx.me as { premium?: boolean }).premium;
     await ctx.repo.saveMember(ctx.me);
     this.changed();
     return this.myProfile(ctx);
+  }
+
+  // ---------------- Billing ----------------
+
+  private gateway(site: Site): PaymentGateway {
+    const prov = site.settings.paymentProvider;
+    const g = (prov !== 'none' && this.deps.payments?.[prov]) || this.deps.payments?.['stub'];
+    if (!g) throw new RuleError('payments_off', `${site.name} is not taking payments yet.`, 400);
+    return g;
+  }
+
+  async startCheckout(ctx: MemberCtx, tier: 'paid' | 'vip', urls: { returnUrl: string; cancelUrl: string }) {
+    this.requireComplete(ctx);
+    if (tier !== 'paid' && tier !== 'vip') throw new RuleError('bad_tier', 'Choose a membership level.');
+    if (this.tierOf(ctx.me) === tier) throw new RuleError('already', `You're already on ${ctx.site.settings.membership.tiers[tier].label}.`);
+    const g = this.gateway(ctx.site);
+    const planId = ctx.site.settings.paymentPlans?.[tier];
+    if (g.provider !== 'stub' && !planId) throw new RuleError('no_plan', 'This level is not on sale yet.', 400);
+    const now = this.iso();
+    const sub: Subscription = { id: randomId('sub_'), memberId: ctx.me.id, provider: g.provider, providerRef: '', tier, status: 'pending', createdAt: now, updatedAt: now };
+    const { checkoutUrl, providerRef } = await g.startCheckout(ctx.site, { subscriptionId: sub.id, memberId: ctx.me.id, tier, planId, ...urls });
+    sub.providerRef = providerRef;
+    await ctx.repo.saveSubscription(sub);
+    this.changed();
+    return { checkoutUrl, subscriptionId: sub.id };
+  }
+
+  async cancelSubscription(ctx: MemberCtx) {
+    const subs = (await ctx.repo.listSubscriptions(ctx.me.id)).filter((x) => x.status === 'active' || x.status === 'past_due');
+    if (!subs.length) throw new RuleError('none', 'You have no active membership to cancel.');
+    for (const sub of subs) {
+      await this.deps.payments?.[sub.provider]?.cancel(ctx.site, sub.providerRef);
+      // Access continues to the end of the paid period.
+      await ctx.repo.saveSubscription({ ...sub, status: 'cancelled', updatedAt: this.iso() });
+    }
+    await this.recomputeTier(ctx.site, ctx.repo, ctx.me.id);
+    this.changed();
+    return this.myProfile({ ...ctx, me: (await ctx.repo.getMember(ctx.me.id))! });
+  }
+
+  // Called by the API for each provider webhook. Unknown or unverifiable events are ignored.
+  async handlePaymentWebhook(site: Site, provider: string, headers: Record<string, string | undefined>, body: unknown, raw: string) {
+    const g = this.deps.payments?.[provider];
+    if (!g) throw new RuleError('not_found', 'Unknown provider.', 404);
+    const up = await g.parseWebhook(site, headers, body, raw);
+    if (!up) return { ok: true, ignored: true };
+    const repo = await this.repo(site);
+    if (up.eventId && !(await repo.claimWebhookEvent(g.provider, up.eventId))) return { ok: true, duplicate: true };
+    let sub = await repo.findSubscriptionByRef(g.provider, up.providerRef);
+    if (!sub && up.customId) {
+      const byId = await repo.getSubscription(up.customId);
+      if (byId && byId.provider === g.provider) sub = { ...byId, providerRef: up.providerRef };
+    }
+    if (!sub) return { ok: true, ignored: true };
+    await repo.saveSubscription({ ...sub, status: up.status, currentPeriodEnd: up.currentPeriodEnd ?? sub.currentPeriodEnd, updatedAt: this.iso() });
+    await this.recomputeTier(site, repo, sub.memberId);
+    this.changed();
+    return { ok: true };
+  }
+
+  // Tier = best of: admin comp, active subscriptions, cancelled ones still inside their paid period.
+  private async recomputeTier(site: Site, repo: SiteRepo, memberId: string) {
+    const m = await repo.getMember(memberId);
+    if (!m) return;
+    const now = this.now().getTime();
+    const rank = { free: 0, paid: 1, vip: 2 } as const;
+    let best: Tier = m.compTier ?? 'free';
+    for (const s of await repo.listSubscriptions(memberId)) {
+      const live = s.status === 'active' || s.status === 'past_due'
+        || (s.status === 'cancelled' && !!s.currentPeriodEnd && Date.parse(s.currentPeriodEnd) > now);
+      if (live && rank[s.tier] > rank[best]) best = s.tier;
+    }
+    if (m.tier !== best) {
+      const next: Member = { ...m, tier: best };
+      delete (next as { premium?: boolean }).premium;
+      await repo.saveMember(next);
+    }
+    void site;
   }
 
   // ---------------- Messaging ----------------
@@ -1132,9 +1226,8 @@ export class Platform {
     const repo = await this.repo(site);
     const m = await repo.getMember(memberId);
     if (!m) throw new RuleError('not_found', 'Member not found.', 404);
-    const next = { ...m, tier };
-    delete (next as { premium?: boolean }).premium;
-    await repo.saveMember(next);
+    await repo.saveMember({ ...m, compTier: tier === 'free' ? undefined : tier });
+    await this.recomputeTier(site, repo, memberId);
     this.changed();
     return { ok: true };
   }
@@ -1155,6 +1248,10 @@ export class Platform {
       }
       site.settings = { ...site.settings, ...rest, ...(mode ? { mode } : {}), membership: mergeMembership(site.settings.membership, membership) };
       if (site.settings.mode === 'sensitive') site.settings.publicTeasers = false;
+      // PayPal and Stripe do not accept adult content; adult sites bill through CCBill.
+      if (site.settings.mode === 'adult' && (site.settings.paymentProvider === 'paypal' || site.settings.paymentProvider === 'stripe')) {
+        throw new RuleError('provider_not_allowed', 'Adult sites need an adult-friendly processor such as CCBill.');
+      }
       if (site.settings.mode !== 'adult' && rest.explicitPhotosAllowed && admin.role !== 'platform') {
         throw new RuleError('forbidden', 'Explicit photos need an adult site, set by WhatBox.', 403);
       }

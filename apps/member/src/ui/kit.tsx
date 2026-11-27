@@ -341,7 +341,7 @@ export function Segmented<T extends string>({ options, value, onChange }: { opti
         const on = o.value === value;
         return (
           <Pressable key={o.value} role="tab" aria-selected={on} onPress={() => onChange(o.value)}
-            style={{ flex: 1, minHeight: 42, borderRadius: 999, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, backgroundColor: on ? '#FFFFFF' : 'transparent', ...(on ? { shadowColor: '#1E2629', shadowOpacity: 0.15, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } } : {}) }}>
+            style={{ flexGrow: 1, flexShrink: 0, flexBasis: 'auto', minHeight: 42, borderRadius: 999, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, backgroundColor: on ? '#FFFFFF' : 'transparent', ...(on ? { shadowColor: '#1E2629', shadowOpacity: 0.15, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } } : {}) }}>
             <Text numberOfLines={1} style={{ fontFamily: fonts(t).body, fontWeight: on ? '700' : '600', fontSize: 15, color: on ? t.ink : t.sub }}>{o.label}</Text>
           </Pressable>
         );

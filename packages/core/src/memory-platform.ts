@@ -1,7 +1,7 @@
 // Builds a fully seeded, in-memory platform. Used by tests and the browser preview.
 import { DevKeyProvider, SiteCrypto } from './crypto';
 import { MemoryControlRepo, MemorySiteRepo, type ControlSnapshot, type SiteSnapshot } from './memory-repo';
-import type { Clock, IdTokenVerifier, Notifier, PaymentGateway } from './repo';
+import type { AiAdmin, Clock, IdTokenVerifier, Notifier, PaymentGateway, PhotoChecker, PhotoStore } from './repo';
 import { DEMO_MEMBER_EMAIL, seedAdmins, seedSite, seedSites } from './seed';
 import { Platform } from './services';
 import { LocalEventHub } from './events';
@@ -26,6 +26,9 @@ export async function createMemoryPlatform(opts: {
   allowSelfServeTier?: boolean; // default true: the in-memory platform is the preview
   payments?: Partial<Record<string, PaymentGateway>>;
   idTokens?: IdTokenVerifier;
+  photos?: PhotoStore; // tests only; the preview keeps data URIs
+  photoChecker?: PhotoChecker;
+  aiAdmin?: AiAdmin;
 } = {}): Promise<MemoryPlatform> {
   const keys = new DevKeyProvider(opts.masterKey ?? 'preview-master-key');
   const now = opts.clock?.now() ?? new Date();
@@ -60,6 +63,7 @@ export async function createMemoryPlatform(opts: {
     },
     keys, notifier, clock: opts.clock, exposeDevCodes: opts.exposeDevCodes ?? true, onChange: opts.onChange, rateLimitScale: opts.rateLimitScale, idTokens: opts.idTokens, events: new LocalEventHub(),
     allowSelfServeTier: opts.allowSelfServeTier ?? true, payments: opts.payments,
+    photos: opts.photos, photoChecker: opts.photoChecker, aiAdmin: opts.aiAdmin,
   });
 
   return {

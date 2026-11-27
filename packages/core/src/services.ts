@@ -3,7 +3,7 @@
 import { LocalEventHub } from './events';
 import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { builtinGeo, unitsForCountry } from './geo';
-import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
+import type { AiAdmin, ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoCheck, PhotoChecker, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
 import { systemClock } from './repo';
 import { DEFAULT_LICENSING, DEFAULT_NOTIFY, DEFAULT_STRICT, isGender, type NotifyPrefs, type StrictPrefs } from './types';
 import {
@@ -15,7 +15,7 @@ import type {
   NewSiteInput, SiteMode, PlatformOverview, PlatformSiteRow, SiteLicensing, SiteStatus, UsageKind, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, GeoPlace, GeoProvider, LocationInput, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
-  SiteSettings, SiteStats, SiteTheme,
+  SiteSettings, SiteStats, SiteTheme, AiCallerPatch, AiOverview,
 } from './types';
 
 export interface PlatformDeps {
@@ -24,6 +24,8 @@ export interface PlatformDeps {
   keys?: KeyProvider;
   notifier: Notifier;
   photos?: PhotoStore; // absent in the preview, which keeps data URIs
+  photoChecker?: PhotoChecker; // WhatBox AI; absent where not configured (then photos are reviewed by people only)
+  aiAdmin?: AiAdmin; // Platform Admin's view of WhatBox AI callers and usage
   idTokens?: IdTokenVerifier; // Apple and Google sign-in; absent where not configured
   events?: EventSink;
   payments?: Partial<Record<string, PaymentGateway>>; // by provider: paypal, stripe, ccbill, stub
@@ -71,6 +73,16 @@ const NAME_MAX = 24;
 const ABOUT_MAX = 2000;
 const MESSAGE_MAX = 2000;
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const RATING_RANK: Record<PhotoRating, number> = { safe: 0, suggestive: 1, explicit: 2 };
+const AI_FLAG_LABEL: Record<string, string> = {
+  phone: 'phone number in photo', email: 'email address in photo', url: 'web address in photo',
+  handle: 'social media handle in photo', qr: 'QR code in photo',
+};
+
+// WhatBox's own sites check photos by default (free); licensed sites opt in and pay per photo.
+export function aiPhotoCheckOn(site: Site): boolean {
+  return site.settings.aiPhotoCheck ?? (site.licensing?.owned ?? false);
+}
 
 function maskTarget(channel: 'email' | 'phone', target: string): string {
   if (channel === 'email') {
@@ -312,6 +324,7 @@ export class Platform {
   private visibleToOthers(site: Site, p: Photo) {
     if (p.status === 'rejected') return false;
     if (p.status === 'pending' && site.settings.photoModeration === 'pre') return false;
+    if (p.status === 'pending' && p.aiFlags?.length) return false; // contact info found: held for a person to look at
     return true;
   }
 
@@ -456,14 +469,34 @@ export class Platform {
   }
 
   async addPhoto(ctx: MemberCtx, input: { kind: PhotoKind; rating?: PhotoRating; url?: string; tone?: [string, string]; file?: { data: Uint8Array; contentType: string } }) {
-    const rating = input.rating ?? 'safe';
+    const marked = input.rating ?? 'safe';
+    let rating = marked;
     const existing = await ctx.repo.listPhotos(ctx.me.id);
     checkPhotoAllowed(ctx.site, input.kind, rating, existing);
     const id = randomId('ph_');
     let blobKey: string | undefined;
+    let ai: PhotoCheck | null = null;
+    let aiNote: string | undefined;
     if (input.file) {
       if (!this.deps.photos) throw new RuleError('no_storage', 'Photo storage is not configured.', 500);
       if (input.file.data.byteLength > PHOTO_MAX_BYTES) throw new RuleError('too_big', 'Photos can be up to 10 MB.', 413);
+      // WhatBox AI looks at the photo before it is stored, so a refused photo is never kept.
+      if (this.deps.photoChecker && aiPhotoCheckOn(ctx.site)) {
+        try {
+          ai = await this.deps.photoChecker.check(ctx.site, input.file.data);
+          await this.deps.control.recordUsage(ctx.site.id, 'ai_photo', 1, this.iso()).catch(() => {});
+        } catch {
+          aiNote = 'WhatBox AI check unavailable'; // people still review it
+        }
+        if (ai && RATING_RANK[ai.rating] > RATING_RANK[rating]) {
+          if (ai.rating === 'explicit' && (input.kind !== 'private' || !ctx.site.settings.explicitPhotosAllowed)) {
+            throw new RuleError('ai_explicit', ctx.site.settings.explicitPhotosAllowed
+              ? 'This photo looks explicit, so it can only be added as a private photo.'
+              : `This photo looks explicit, and ${ctx.site.name} does not allow explicit photos. Try a different photo.`);
+          }
+          rating = ai.rating;
+        }
+      }
       blobKey = `${ctx.me.id}/${id}`;
       await this.deps.photos.put(ctx.site, blobKey, input.file.data, input.file.contentType);
       await this.deps.control.recordUsage(ctx.site.id, 'storage_mb', Math.max(1, Math.ceil(input.file.data.byteLength / 1_048_576)), this.iso()).catch(() => {});
@@ -477,14 +510,20 @@ export class Platform {
         else await ctx.repo.savePhoto({ ...oldMain, kind: 'public', sort: Date.now() });
       }
     }
+    const aiFlags = (ai?.contactKinds ?? []).map((k) => AI_FLAG_LABEL[k] ?? `${k} in photo`);
     const photo: Photo = {
       id, memberId: ctx.me.id, kind: input.kind, rating, status: 'pending',
       url: blobKey ? undefined : input.url, blobKey, tone: input.tone, sort: Date.now(), createdAt: this.iso(),
+      ...(ai ? { aiRating: ai.rating } : {}), ...(aiFlags.length ? { aiFlags } : {}),
     };
     await ctx.repo.savePhoto(photo);
+    const reasons = ['new upload', ...aiFlags];
+    if (ai && ai.rating !== marked) reasons.push(`WhatBox AI rated it ${ai.rating}`);
+    if (aiNote) reasons.push(aiNote);
     await ctx.repo.saveModeration({
       id: randomId('mod_'), kind: 'photo', refId: photo.id, memberId: ctx.me.id,
-      summary: `New ${input.kind} photo, marked ${rating}`, reasons: ['new upload'], status: 'pending', createdAt: this.iso(),
+      summary: `New ${input.kind} photo, marked ${marked}${ai ? `; WhatBox AI: ${ai.rating}${aiFlags.length ? ', contact info' : ''}` : ''}`,
+      reasons, status: 'pending', createdAt: this.iso(),
     });
     this.changed();
     return this.myProfile(ctx);
@@ -496,6 +535,9 @@ export class Platform {
     if (!p) throw new RuleError('not_found', 'Photo not found.', 404);
     const kind = patch.kind ?? p.kind;
     const rating = patch.rating ?? p.rating;
+    if (p.aiRating && RATING_RANK[rating] < RATING_RANK[p.aiRating]) {
+      throw new RuleError('ai_rating', `WhatBox AI rated this photo ${p.aiRating}, so it can't be marked ${rating}.`);
+    }
     if (kind !== p.kind || rating !== p.rating) {
       const others = photos.filter((x) => x.id !== id);
       checkPhotoAllowed(ctx.site, kind, rating, others);
@@ -1400,6 +1442,7 @@ export class Platform {
       sites.push({
         id: site.id, slug: site.slug, name: site.name, mode: site.settings.mode, status: site.status ?? 'active',
         domains: site.domains, ownerIds: site.ownerIds, members, usage: u, licensing, estimateCents: Platform.estimateCents(licensing, u),
+        aiPhotoCheck: aiPhotoCheckOn(site),
       });
     }
     const owners = (await this.deps.control.listAdmins()).sort((a, b) => a.email.localeCompare(b.email));
@@ -1450,7 +1493,7 @@ export class Platform {
     return site;
   }
 
-  async platformUpdateSite(admin: AdminUser, siteId: string, patch: { name?: string; domains?: string[]; status?: SiteStatus; licensing?: Partial<SiteLicensing> }): Promise<Site> {
+  async platformUpdateSite(admin: AdminUser, siteId: string, patch: { name?: string; domains?: string[]; status?: SiteStatus; licensing?: Partial<SiteLicensing>; aiPhotoCheck?: boolean }): Promise<Site> {
     this.requirePlatform(admin);
     const site = await this.deps.control.getSite(siteId);
     if (!site) throw new RuleError('not_found', 'Site not found.', 404);
@@ -1475,10 +1518,54 @@ export class Platform {
       }
       site.licensing = { owned: patch.licensing.owned ?? cur.owned, baseMonthlyCents: Math.round(base), ratesCents: rates };
     }
+    if (patch.aiPhotoCheck !== undefined) site.settings = { ...site.settings, aiPhotoCheck: !!patch.aiPhotoCheck };
     await this.deps.control.saveSite(site);
     await this.audit(admin, patch.status ? `platform.site_${patch.status === 'suspended' ? 'suspend' : 'resume'}` : 'platform.site_update', site.id, undefined, describePatch(patch));
     this.changed();
     return site;
+  }
+
+  // ---------------- WhatBox AI (shared photo checks) ----------------
+
+  async platformAi(admin: AdminUser, month?: string): Promise<AiOverview> {
+    this.requirePlatform(admin);
+    const m = month && /^\d{4}-\d{2}$/.test(month) ? month : this.iso().slice(0, 7);
+    const empty = { month: m, callers: [], totalChecks: 0, totalCents: 0 };
+    const ai = this.deps.aiAdmin;
+    if (!ai) return { available: false, message: 'WhatBox AI is not connected in this environment.', ...empty };
+    try {
+      return { available: true, url: ai.url, ...(await ai.overview(m)) };
+    } catch (e) {
+      return { available: false, url: ai.url, message: `WhatBox AI did not answer (${(e as Error).message}).`, ...empty };
+    }
+  }
+
+  private aiAdmin() {
+    if (!this.deps.aiAdmin) throw new RuleError('ai_off', 'WhatBox AI is not connected in this environment.', 409);
+    return this.deps.aiAdmin;
+  }
+
+  async platformAiAddCaller(admin: AdminUser, input: { name: string; billable: boolean; rateCents?: number }) {
+    this.requirePlatform(admin);
+    const name = String(input?.name ?? '').trim();
+    if (!name) throw new RuleError('bad_name', 'Give the app or site a name.');
+    const out = await this.aiAdmin().addCaller({ name, billable: input.billable !== false, rateCents: input.rateCents });
+    await this.audit(admin, 'ai.caller_add', undefined, out.caller.id, `billable=${out.caller.billable}`);
+    return out;
+  }
+
+  async platformAiUpdateCaller(admin: AdminUser, id: string, patch: AiCallerPatch) {
+    this.requirePlatform(admin);
+    const out = await this.aiAdmin().updateCaller(id, patch ?? {});
+    await this.audit(admin, 'ai.caller_update', undefined, id, describePatch(patch ?? {}));
+    return out;
+  }
+
+  async platformAiReplaceKey(admin: AdminUser, id: string) {
+    this.requirePlatform(admin);
+    const out = await this.aiAdmin().replaceKey(id);
+    await this.audit(admin, 'ai.caller_key', undefined, id);
+    return out;
   }
 
   async platformSaveOwner(admin: AdminUser, input: { id?: string; email: string; name: string; siteIds: string[] }): Promise<AdminUser> {

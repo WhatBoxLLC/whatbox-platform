@@ -6,7 +6,7 @@ import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
   ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, MemberEvent, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
-  SearchResult, Site, GeoCountry, GeoPlace, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview,
+  SearchResult, Site, GeoCountry, GeoPlace, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview, AiCallerPatch, AiCallerRow, AiOverview,
 } from './types';
 
 export class ApiError extends Error {
@@ -92,6 +92,11 @@ export interface AdminApi {
   platformUpdateSite(siteId: string, patch: PlatformSitePatch): Promise<Site>;
   saveOwner(input: { id?: string; email: string; name: string; siteIds: string[] }): Promise<AdminUser>;
   deleteOwner(ownerId: string): Promise<{ ok: boolean }>;
+  // WhatBox AI: shared photo checks for every site and app
+  ai(month?: string): Promise<AiOverview>;
+  aiAddCaller(input: { name: string; billable: boolean; rateCents?: number }): Promise<{ caller: AiCallerRow; key: string }>;
+  aiUpdateCaller(id: string, patch: AiCallerPatch): Promise<{ caller: AiCallerRow }>;
+  aiReplaceKey(id: string): Promise<{ caller: AiCallerRow; key: string }>;
 }
 export type PlatformSitePatch = Parameters<Platform['platformUpdateSite']>[2];
 
@@ -187,6 +192,10 @@ export function createLocalAdminApi(platform: Platform): AdminApi {
     platformUpdateSite: (id, patch) => wrap(async () => platform.platformUpdateSite(await admin(), id, patch)),
     saveOwner: (input) => wrap(async () => platform.platformSaveOwner(await admin(), input)),
     deleteOwner: (id) => wrap(async () => platform.platformDeleteOwner(await admin(), id)),
+    ai: (month) => wrap(async () => platform.platformAi(await admin(), month)),
+    aiAddCaller: (input) => wrap(async () => platform.platformAiAddCaller(await admin(), input)),
+    aiUpdateCaller: (id, patch) => wrap(async () => platform.platformAiUpdateCaller(await admin(), id, patch)),
+    aiReplaceKey: (id) => wrap(async () => platform.platformAiReplaceKey(await admin(), id)),
     pages: (s) => wrap(async () => platform.adminPages(await admin(), s)),
     savePage: (s, p) => wrap(async () => platform.adminSavePage(await admin(), s, p)),
     deletePage: (s, slug) => wrap(async () => platform.adminDeletePage(await admin(), s, slug)),

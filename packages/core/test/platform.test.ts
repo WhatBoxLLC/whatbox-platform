@@ -508,6 +508,90 @@ test('genders, multi-select status, exclusive choices and the Other caution', as
   assert.match(p.cautions[0], /OTHER/);
 });
 
+// ---------- WhatBox AI photo checks ----------
+
+import { DEMO_PLATFORM_EMAIL, type PhotoCheck, type PhotoChecker, type PhotoStore } from '../src/index';
+
+function aiPlatform(result: PhotoCheck | Error) {
+  const stored: string[] = [];
+  const photos: PhotoStore = {
+    async put(_s, key) { stored.push(key); },
+    async delete() {},
+    readUrl: (_s, key) => 'https://photos.test/' + key,
+  };
+  let calls = 0;
+  const photoChecker: PhotoChecker = { async check() { calls++; if (result instanceof Error) throw result; return result; } };
+  return { stored, photos, photoChecker, calls: () => calls };
+}
+
+async function aiSignIn(result: PhotoCheck | Error) {
+  const t = aiPlatform(result);
+  const mp = await createMemoryPlatform({ photos: t.photos, photoChecker: t.photoChecker });
+  const api = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await api.startVerification('email', DEMO_MEMBER_EMAIL);
+  const { token } = await api.verify(s.challengeId, s.devCode!);
+  api.setToken(token);
+  const add = async (input: Parameters<import('../src/index').Platform['addPhoto']>[1]) =>
+    mp.platform.addPhoto(await mp.platform.memberCtx(await mp.platform.resolveSite('afterh'), token, 'web'), input);
+  return { ...t, mp, api, add };
+}
+const file = { data: new Uint8Array([1, 2, 3]), contentType: 'image/jpeg' };
+test('WhatBox AI: explicit photos are refused before they are stored', async () => {
+  const t = await aiSignIn({ rating: 'explicit', contactKinds: [] });
+  await assert.rejects(t.add({ kind: 'public', file }), /looks explicit/);
+  await assert.rejects(t.add({ kind: 'private', file }), /does not allow explicit/);
+  assert.equal(t.stored.length, 0);
+  assert.equal(t.calls(), 2);
+});
+
+test('WhatBox AI: suggestive rating sticks; contact info holds the photo for review', async () => {
+  const t = await aiSignIn({ rating: 'suggestive', contactKinds: ['phone', 'qr'] });
+  const me = await t.add({ kind: 'public', rating: 'safe', file });
+  const p = me.photos.find((x) => x.status === 'pending')!;
+  assert.equal(p.rating, 'suggestive');
+  await assert.rejects(t.api.updatePhoto(p.id, { rating: 'safe' }), /WhatBox AI rated this photo suggestive/);
+
+  // Another member can't see it until a moderator approves it, even though AfterH shows photos before review.
+  const other = createLocalMemberApi(t.mp.platform, 'afterh', 'web');
+  const s = await other.startVerification('email', 'viewer@example.com');
+  other.setToken((await other.verify(s.challengeId, s.devCode!)).token);
+  await other.updateMe({ displayName: 'Viewer', birthYear: 1990, gender: 'woman', seeking: ['man'], postal: '80202', fields: { hsv_status: ['HSV-1'] } });
+  const alexId = me.member.id;
+  assert.ok(!(await other.profile(alexId)).publicPhotos.some((x) => x.id === p.id));
+
+  const admin = createLocalAdminApi(t.mp.platform);
+  const st = await admin.start(DEMO_PLATFORM_EMAIL);
+  admin.setToken((await admin.verify(st.challengeId, st.devCode!)).token);
+  const item = (await admin.moderation('site_afterh', 'pending')).find((i) => i.refId === p.id)!;
+  assert.ok(item.reasons.includes('phone number in photo') && item.reasons.includes('QR code in photo'));
+  assert.ok(item.reasons.includes('WhatBox AI rated it suggestive'));
+  await admin.decide('site_afterh', item.id, 'approve');
+  assert.ok((await other.profile(alexId)).publicPhotos.some((x) => x.id === p.id));
+
+  // Metered per site, free on WhatBox's own site.
+  const row = (await admin.platform()).sites.find((x) => x.id === 'site_afterh')!;
+  assert.equal(row.usage.ai_photo, 1);
+  assert.equal(row.aiPhotoCheck, true);
+  assert.equal(row.estimateCents, 0);
+  // No WhatBox AI admin in this environment: the panel says so instead of failing.
+  assert.equal((await admin.ai()).available, false);
+});
+
+test('WhatBox AI: an outage never blocks uploads; sites can turn checks off', async () => {
+  const t = await aiSignIn(new Error('down'));
+  await t.add({ kind: 'public', file });
+  assert.equal(t.stored.length, 1);
+  const admin = createLocalAdminApi(t.mp.platform);
+  const st = await admin.start(DEMO_PLATFORM_EMAIL);
+  admin.setToken((await admin.verify(st.challengeId, st.devCode!)).token);
+  const item = (await admin.moderation('site_afterh', 'pending')).find((i) => i.reasons.includes('WhatBox AI check unavailable'));
+  assert.ok(item);
+  await admin.platformUpdateSite('site_afterh', { aiPhotoCheck: false });
+  const before = t.calls();
+  await t.add({ kind: 'public', file });
+  assert.equal(t.calls(), before);
+});
+
 test('worldwide location: city search, postal, device position snapped to a town', async () => {
   const mp = await createMemoryPlatform();
   const a = createLocalMemberApi(mp.platform, 'afterh', 'web');

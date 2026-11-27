@@ -44,6 +44,8 @@ jobs:
         run: npm test -w @whatbox/core
       - name: API unit tests
         run: npm test -w @whatbox/api
+      - name: WhatBox AI tests
+        run: npm test -w @whatbox/ai
       - name: Database setup
         run: npm run db:migrate && npm run db:seed
       - name: End-to-end smoke test (two API instances)

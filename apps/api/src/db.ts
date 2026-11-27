@@ -9,6 +9,7 @@ import { createNotifier } from './notify';
 import { createIdTokenVerifier } from './idp';
 import { createPaymentGateways } from './payments';
 import { PgSiteProvisioner } from './provision';
+import { createAiClients } from './ai-client';
 
 export { pool, closePools } from './db-pool';
 
@@ -49,6 +50,7 @@ export function createPlatform() {
     keys: keyProvider(),
     notifier: createNotifier(),
     photos,
+    ...createAiClients(),
     idTokens: createIdTokenVerifier(),
     events,
     exposeDevCodes: config.exposeDevCodes,

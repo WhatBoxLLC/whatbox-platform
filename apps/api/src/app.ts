@@ -186,6 +186,12 @@ export class AdminController {
     return this.p.platformUpdateSite(await this.admin(a), s, b ?? {});
   }
   @Post('platform/owners') async owner(@Headers('authorization') a: string, @Body() b: any) { return this.p.platformSaveOwner(await this.admin(a), b ?? {}); }
+  @Get('platform/ai') async ai(@Headers('authorization') a: string, @Query('month') m?: string) { return this.p.platformAi(await this.admin(a), m); }
+  @Post('platform/ai/callers') async aiAdd(@Headers('authorization') a: string, @Body() b: any) { return this.p.platformAiAddCaller(await this.admin(a), b ?? {}); }
+  @Patch('platform/ai/callers/:id') async aiUpd(@Headers('authorization') a: string, @Param('id') id: string, @Body() b: any) {
+    return this.p.platformAiUpdateCaller(await this.admin(a), id, b ?? {});
+  }
+  @Post('platform/ai/callers/:id/key') async aiKey(@Headers('authorization') a: string, @Param('id') id: string) { return this.p.platformAiReplaceKey(await this.admin(a), id); }
   @Delete('platform/owners/:id') async delOwner(@Headers('authorization') a: string, @Param('id') id: string) { return this.p.platformDeleteOwner(await this.admin(a), id); }
   @Patch('sites/:site') async upd(@Headers('authorization') a: string, @Param('site') s: string, @Body() b: any) {
     return this.p.adminUpdateSite(await this.admin(a), s, b);

@@ -32,6 +32,10 @@ export const config = {
   paymentsStub: process.env.PAYMENTS_STUB === 'true', // dev only: pretend processor with a /dev/checkout page
   allowSelfServeTier: process.env.ALLOW_SELF_SERVE_TIER === 'true', // dev only: switch tier without paying
   azureStorageJson: process.env.AZURE_STORAGE_JSON ?? '', // optional storage account per site
+  // WhatBox AI photo checks (apps/ai). Unset means photos are reviewed by people only.
+  aiUrl: (process.env.AI_URL ?? '').replace(/\/$/, ''),
+  aiApiKey: process.env.AI_API_KEY ?? '', // this platform's caller key (wbai_...)
+  aiAdminKey: process.env.AI_ADMIN_KEY ?? '', // lets Platform Admin list and add callers
 };
 
 export function dbUrl(dbName: string) {

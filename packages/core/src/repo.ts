@@ -2,7 +2,7 @@
 // a control database); the clickable preview implements them in memory.
 import type {
   AdminUser, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
-  Photo, PrivateAccess, PushToken, Report, Subscription, SubscriptionStatus, ReviewStatus, Site, VerificationChallenge, View,
+  Photo, PrivateAccess, PushToken, Report, Subscription, SubscriptionStatus, ReviewStatus, Site, UsageKind, VerificationChallenge, View,
 } from './types';
 
 export interface AdminSession { token: string; adminId: string; expiresAt: string }
@@ -16,6 +16,9 @@ export interface ControlRepo {
   saveSite(site: Site): Promise<void>;
   getAdmin(id: string): Promise<AdminUser | null>;
   getAdminByEmail(email: string): Promise<AdminUser | null>;
+  listAdmins(): Promise<AdminUser[]>;
+  saveAdmin(a: AdminUser): Promise<void>;
+  deleteAdmin(id: string): Promise<void>;
   saveAdminSession(s: AdminSession): Promise<void>;
   getAdminSession(token: string): Promise<AdminSession | null>;
   deleteAdminSession(token: string): Promise<void>;
@@ -26,9 +29,10 @@ export interface ControlRepo {
   hit(key: string, windowSeconds: number, nowIso: string): Promise<number>;
   // Metering for licensing: counts only, no content.
   recordUsage(siteId: string, kind: UsageKind, qty: number, atIso: string): Promise<void>;
-  usageSummary(sinceIso: string): Promise<{ siteId: string; kind: UsageKind; qty: number }[]>;
+  usageSummary(sinceIso: string, untilIso?: string): Promise<{ siteId: string; kind: UsageKind; qty: number }[]>;
 }
-export type UsageKind = 'email' | 'sms' | 'storage_mb' | 'push' | 'ai_screen';
+// Creates a new site's own database and schema. The preview's in-memory store needs nothing.
+export interface SiteProvisioner { provision(site: Site): Promise<void> }
 
 // Coarse prefilter. Distance, custom fields, sorting and paging happen in the service.
 export interface MemberQuery {

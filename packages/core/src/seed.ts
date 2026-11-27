@@ -1,6 +1,7 @@
 // Placeholder seed data. No real member data is used anywhere in the prototype.
 import { lookupPostal } from './geo';
 import { DEFAULT_MEMBERSHIP } from './rules';
+import { DEFAULT_LICENSING } from './types';
 import type {
   AdminUser, ContentPage, Gender, Member, Message, ModerationItem, Photo, PrivateAccess, ProfileFieldDef, Site,
   SiteSettings, Tier, View, Like,
@@ -61,7 +62,7 @@ export function seedSites(now: Date): Site[] {
         { key: 'hsv_status', label: 'Status', type: 'select', options: ['HSV-1', 'HSV-2', 'Both', 'Prefer not to say'], required: true, filterable: true, showOnProfile: true, sensitive: true, section: 'details', order: 1 },
         ...commonFields(2),
       ],
-      ownerIds: ['adm_owner'], createdAt: created,
+      ownerIds: ['adm_owner'], createdAt: created, status: 'active', licensing: { ...DEFAULT_LICENSING, owned: true },
     },
     {
       id: 'site_hfriends', slug: 'hfriends', name: 'HFriends', domains: ['hfriends.com', 'hfriends.localhost'],
@@ -77,7 +78,7 @@ export function seedSites(now: Date): Site[] {
         { key: 'accessibility', label: 'About my disability', type: 'multiselect', options: ['Wheelchair user', 'Uses a mobility aid', 'Deaf or hard of hearing', 'Blind or low vision', 'Chronic illness', 'Neurodivergent', 'Prefer not to say'], filterable: true, showOnProfile: true, sensitive: true, section: 'details', order: 1 },
         ...commonFields(2),
       ],
-      ownerIds: ['adm_owner'], createdAt: created,
+      ownerIds: ['adm_owner'], createdAt: created, status: 'active', licensing: { ...DEFAULT_LICENSING, owned: true },
     },
     {
       id: 'site_datealittle', slug: 'datealittle', name: 'DateALittle', domains: ['datealittle.com', 'datealittle.localhost'],
@@ -93,7 +94,7 @@ export function seedSites(now: Date): Site[] {
         { key: 'stature', label: 'Stature', type: 'select', options: ['Little person', 'Average height', 'Prefer not to say'], required: true, filterable: true, showOnProfile: true, section: 'details', order: 1 },
         ...commonFields(2),
       ],
-      ownerIds: ['adm_owner'], createdAt: created,
+      ownerIds: ['adm_owner'], createdAt: created, status: 'active', licensing: { ...DEFAULT_LICENSING, owned: true },
     },
   ];
 }

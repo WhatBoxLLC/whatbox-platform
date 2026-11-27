@@ -24,12 +24,14 @@ export class PgControlRepo implements ControlRepo {
       [site.id, site.slug, site.domains, siteDbName(site.slug), 'site-key-' + site.slug, site],
     );
   }
+  async listAdmins() { return docs<AdminUser>((await this.db.query('SELECT doc FROM admins ORDER BY email')).rows); }
+  async saveAdmin(a: AdminUser) {
+    await this.db.query('INSERT INTO admins (id, email, doc) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET email=$2, doc=$3', [a.id, a.email, a]);
+  }
+  async deleteAdmin(id: string) { await this.db.query('DELETE FROM admins WHERE id=$1', [id]); }
   async getAdmin(id: string) { return (await this.db.query('SELECT doc FROM admins WHERE id=$1', [id])).rows[0]?.doc ?? null; }
   async getAdminByEmail(email: string) {
     return (await this.db.query('SELECT doc FROM admins WHERE lower(email)=lower($1)', [email])).rows[0]?.doc ?? null;
-  }
-  async saveAdmin(a: AdminUser) {
-    await this.db.query('INSERT INTO admins (id, email, doc) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET email=$2, doc=$3', [a.id, a.email, a]);
   }
   async saveAdminSession(s: AdminSession) {
     await this.db.query('INSERT INTO admin_sessions (token, admin_id, expires_at) VALUES ($1,$2,$3)', [s.token, s.adminId, s.expiresAt]);
@@ -62,8 +64,11 @@ export class PgControlRepo implements ControlRepo {
   async recordUsage(siteId: string, kind: UsageKind, qty: number, at: string) {
     await this.db.query('INSERT INTO usage_events (site_id, kind, qty, at) VALUES ($1,$2,$3,$4)', [siteId, kind, qty, at]);
   }
-  async usageSummary(since: string) {
-    const r = await this.db.query('SELECT site_id, kind, SUM(qty)::int AS qty FROM usage_events WHERE at >= $1 GROUP BY site_id, kind ORDER BY site_id, kind', [since]);
+  async usageSummary(since: string, until?: string) {
+    const r = await this.db.query(
+      'SELECT site_id, kind, SUM(qty)::int AS qty FROM usage_events WHERE at >= $1 AND ($2::timestamptz IS NULL OR at < $2) GROUP BY site_id, kind ORDER BY site_id, kind',
+      [since, until ?? null],
+    );
     return r.rows.map((x: any) => ({ siteId: x.site_id, kind: x.kind as UsageKind, qty: x.qty as number }));
   }
 }

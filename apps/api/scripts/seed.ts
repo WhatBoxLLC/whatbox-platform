@@ -13,7 +13,7 @@ import { PgControlRepo, PgSiteRepo, siteDbName } from '../src/pg-repo';
   for (const site of seedSites(now)) {
     await control.saveSite(site);
     const db = pool(siteDbName(site.slug));
-    await db.query('TRUNCATE members, photos, private_access, likes, passes, favorites, views, blocks, messages, contact_optins, reports, moderation, pages, challenges, sessions CASCADE');
+    await db.query('TRUNCATE members, photos, private_access, likes, passes, favorites, views, blocks, messages, contact_optins, reports, moderation, pages, challenges, sessions, subscriptions, webhook_events CASCADE');
     const repo = new PgSiteRepo(db);
     const crypto = new SiteCrypto(keys, site.id);
     const s = seedSite(site, now, { demoMemberHash: { emailHash: await crypto.lookupHash(DEMO_MEMBER_EMAIL), emailEnc: await crypto.encrypt(DEMO_MEMBER_EMAIL) } });

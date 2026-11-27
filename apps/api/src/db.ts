@@ -7,6 +7,7 @@ import { createPhotoStore } from './photos';
 import { createNotifier } from './notify';
 import { createIdTokenVerifier } from './idp';
 import { createPaymentGateways } from './payments';
+import { PgSiteProvisioner } from './provision';
 
 export { pool, closePools } from './db-pool';
 
@@ -52,6 +53,7 @@ export function createPlatform() {
     exposeDevCodes: config.exposeDevCodes,
     rateLimitScale: config.rateLimitScale,
     payments: createPaymentGateways(),
+    provisioner: new PgSiteProvisioner(),
     allowSelfServeTier: config.allowSelfServeTier && process.env.NODE_ENV !== 'production',
   });
   return { platform, control, photos, events };

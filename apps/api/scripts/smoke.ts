@@ -148,5 +148,30 @@ const base = process.env.API_URL ?? 'http://localhost:4000';
   await temp.like(rosa.id, true);
   await temp.deleteAccount('DELETE');
 
+  // Platform admin: add a site (gets its own database), sign a member up there, suspend it
+  const pa = createHttpAdminApi(base);
+  const ps = await pa.start('admin@whatbox.test');
+  pa.setToken((await pa.verify(ps.challengeId, ps.devCode!)).token);
+  await assert.rejects(admin.platform()); // owners can't see the platform view
+  let smokeSite = (await pa.platform()).sites.find((x) => x.slug === 'smoketest');
+  if (!smokeSite) {
+    await pa.createSite({ slug: 'smoketest', name: 'Smoke Test', domains: ['smoketest.whatbox.test'], mode: 'standard', ownerIds: [] });
+    smokeSite = (await pa.platform()).sites.find((x) => x.slug === 'smoketest')!;
+  }
+  await pa.platformUpdateSite(smokeSite.id, { status: 'active' });
+  const sm = createHttpMemberApi(base, 'smoketest', 'web');
+  const sms = await sm.startVerification('email', `smoke.${Date.now()}@example.com`);
+  sm.setToken((await sm.verify(sms.challengeId, sms.devCode!)).token);
+  assert.equal((await sm.site()).name, 'Smoke Test');
+  // Its own database: the AfterH demo member's session means nothing here
+  const cross = createHttpMemberApi(base, 'smoketest', 'web');
+  cross.setToken(token);
+  await assert.rejects(cross.me(), (e: any) => e.status === 401);
+  await pa.platformUpdateSite(smokeSite.id, { status: 'suspended' });
+  await assert.rejects(sm.site(), (e: any) => e.status === 503);
+  await pa.platformUpdateSite(smokeSite.id, { status: 'active' });
+  const ov = await pa.platform();
+  assert.ok((ov.sites.find((x) => x.slug === 'afterh')!.usage.email ?? 0) > 0);
+
   console.log('smoke ok:', { members: stats.members, openModeration: stats.openModeration, searchTotal: res.total });
 })().catch((e) => { console.error('smoke FAILED', e); process.exit(1); });

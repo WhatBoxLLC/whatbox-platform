@@ -149,7 +149,7 @@ export class SocialController extends SiteScoped {
 export class WebhookController {
   constructor(@Inject(PLATFORM) private p: Platform) {}
   @Post(':provider/:site') async hook(@Req() r: Request, @Param('provider') provider: string, @Param('site') slug: string, @Body() b: unknown) {
-    const site = await this.p.resolveSite(slug);
+    const site = await this.p.resolveSite(slug, { allowSuspended: true }); // cancellations still apply
     return this.p.handlePaymentWebhook(site, provider, r.headers as Record<string, string | undefined>, b, JSON.stringify(b ?? null));
   }
 }
@@ -165,6 +165,14 @@ export class AdminController {
     return { admin: { id: ad.id, email: ad.email, name: ad.name, role: ad.role }, sites: await this.p.adminSites(ad) };
   }
   @Get('sites/:site') async site(@Headers('authorization') a: string, @Param('site') s: string) { return this.p.adminSite(await this.admin(a), s); }
+  // WhatBox platform admins
+  @Get('platform') async platform(@Headers('authorization') a: string, @Query('month') m?: string) { return this.p.platformOverview(await this.admin(a), m); }
+  @Post('platform/sites') async newSite(@Headers('authorization') a: string, @Body() b: any) { return this.p.platformCreateSite(await this.admin(a), b ?? {}); }
+  @Patch('platform/sites/:site') async platSite(@Headers('authorization') a: string, @Param('site') s: string, @Body() b: any) {
+    return this.p.platformUpdateSite(await this.admin(a), s, b ?? {});
+  }
+  @Post('platform/owners') async owner(@Headers('authorization') a: string, @Body() b: any) { return this.p.platformSaveOwner(await this.admin(a), b ?? {}); }
+  @Delete('platform/owners/:id') async delOwner(@Headers('authorization') a: string, @Param('id') id: string) { return this.p.platformDeleteOwner(await this.admin(a), id); }
   @Patch('sites/:site') async upd(@Headers('authorization') a: string, @Param('site') s: string, @Body() b: any) {
     return this.p.adminUpdateSite(await this.admin(a), s, b);
   }

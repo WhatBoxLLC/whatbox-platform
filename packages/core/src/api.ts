@@ -6,7 +6,7 @@ import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
   ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, MemberEvent, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
-  SearchResult, Site, SiteMode, SiteStats, Tier,
+  SearchResult, Site, SiteMode, SiteStats, Tier, AdminUser, NewSiteInput, PlatformOverview,
 } from './types';
 
 export class ApiError extends Error {
@@ -80,7 +80,15 @@ export interface AdminApi {
   pages(siteId: string): Promise<ContentPage[]>;
   savePage(siteId: string, page: ContentPage): Promise<ContentPage[]>;
   deletePage(siteId: string, slug: string): Promise<ContentPage[]>;
+
+  // WhatBox platform admins only
+  platform(month?: string): Promise<PlatformOverview>;
+  createSite(input: NewSiteInput): Promise<Site>;
+  platformUpdateSite(siteId: string, patch: PlatformSitePatch): Promise<Site>;
+  saveOwner(input: { id?: string; email: string; name: string; siteIds: string[] }): Promise<AdminUser>;
+  deleteOwner(ownerId: string): Promise<{ ok: boolean }>;
 }
+export type PlatformSitePatch = Parameters<Platform['platformUpdateSite']>[2];
 
 async function wrap<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -165,6 +173,11 @@ export function createLocalAdminApi(platform: Platform): AdminApi {
     members: (s, o) => wrap(async () => platform.adminMembers(await admin(), s, o)),
     setMemberStatus: (s, m, st) => wrap(async () => platform.adminSetMemberStatus(await admin(), s, m, st)),
     setMemberTier: (s, m, t) => wrap(async () => platform.adminSetMemberTier(await admin(), s, m, t)),
+    platform: (month) => wrap(async () => platform.platformOverview(await admin(), month)),
+    createSite: (input) => wrap(async () => platform.platformCreateSite(await admin(), input)),
+    platformUpdateSite: (id, patch) => wrap(async () => platform.platformUpdateSite(await admin(), id, patch)),
+    saveOwner: (input) => wrap(async () => platform.platformSaveOwner(await admin(), input)),
+    deleteOwner: (id) => wrap(async () => platform.platformDeleteOwner(await admin(), id)),
     pages: (s) => wrap(async () => platform.adminPages(await admin(), s)),
     savePage: (s, p) => wrap(async () => platform.adminSavePage(await admin(), s, p)),
     deletePage: (s, slug) => wrap(async () => platform.adminDeletePage(await admin(), s, slug)),

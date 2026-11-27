@@ -106,7 +106,26 @@ export interface Site {
   fields: ProfileFieldDef[];
   ownerIds: string[];
   createdAt: string;
+  status?: SiteStatus; // missing means active
+  licensing?: SiteLicensing;
 }
+
+export type SiteStatus = 'active' | 'suspended';
+export type UsageKind = 'email' | 'sms' | 'storage_mb' | 'push' | 'ai_screen';
+// WhatBox's own sites are free. Third-party sites pay a base fee plus metered usage.
+export interface SiteLicensing {
+  owned: boolean;
+  baseMonthlyCents: number;
+  ratesCents: Partial<Record<UsageKind, number>>; // per unit, may be fractional (e.g. 0.2 per email)
+}
+export const DEFAULT_LICENSING: SiteLicensing = { owned: false, baseMonthlyCents: 9900, ratesCents: { email: 0.2, sms: 2, storage_mb: 0.05, ai_screen: 0.5 } };
+
+export interface PlatformSiteRow {
+  id: string; slug: string; name: string; mode: SiteMode; status: SiteStatus; domains: string[]; ownerIds: string[];
+  members: number; usage: Partial<Record<UsageKind, number>>; licensing: SiteLicensing; estimateCents: number;
+}
+export interface PlatformOverview { month: string; sites: PlatformSiteRow[]; owners: AdminUser[] }
+export interface NewSiteInput { slug: string; name: string; domains: string[]; mode: SiteMode; ownerIds: string[]; templateSiteId?: string; tagline?: string; audience?: string }
 
 export type AdminRole = 'platform' | 'owner';
 export interface AdminUser {

@@ -3,14 +3,16 @@
 import { LocalEventHub } from './events';
 import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCrypto } from './crypto';
 import { lookupPostal } from './geo';
-import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteRepo } from './repo';
+import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
 import { systemClock } from './repo';
+import { DEFAULT_LICENSING } from './types';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
 } from './rules';
 import type {
-  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, MemberEvent, Subscription, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
+  AccessStatus, ActivityKind, ActivityList, ActivityPerson, AdminMemberRow, DiscoverCard, Units, Tier, TierPerms, MembershipSettings, Message, MemberEvent, Subscription,
+  NewSiteInput, SiteMode, PlatformOverview, PlatformSiteRow, SiteLicensing, SiteStatus, UsageKind, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
   SiteSettings, SiteStats, SiteTheme,
@@ -25,7 +27,8 @@ export interface PlatformDeps {
   idTokens?: IdTokenVerifier; // Apple and Google sign-in; absent where not configured
   events?: EventSink;
   payments?: Partial<Record<string, PaymentGateway>>; // by provider: paypal, stripe, ccbill, stub
-  allowSelfServeTier?: boolean; // preview and local dev only: switch tier without paying
+  allowSelfServeTier?: boolean;
+  provisioner?: SiteProvisioner; // creates a new site's database // preview and local dev only: switch tier without paying
   clock?: Clock;
   exposeDevCodes?: boolean; // return codes to the client (dev and preview only)
   rateLimitScale?: number; // multiplies every rate limit; >1 only for local dev and test runs
@@ -98,9 +101,10 @@ export class Platform {
 
   // ---------------- Sites and public content ----------------
 
-  async resolveSite(hostOrSlug: string): Promise<Site> {
+  async resolveSite(hostOrSlug: string, opts: { allowSuspended?: boolean } = {}): Promise<Site> {
     const site = await this.deps.control.findSite(hostOrSlug);
     if (!site) throw new RuleError('site_not_found', 'Unknown site.', 404);
+    if (site.status === 'suspended' && !opts.allowSuspended) throw new RuleError('site_unavailable', `${site.name} is not available right now.`, 503);
     return site;
   }
 
@@ -1215,6 +1219,173 @@ export class Platform {
     const m = await repo.getMember(memberId);
     if (!m) throw new RuleError('not_found', 'Member not found.', 404);
     await repo.saveMember({ ...m, status });
+    this.changed();
+    return { ok: true };
+  }
+
+  // ---------------- Platform Admin (WhatBox staff only) ----------------
+
+  private requirePlatform(admin: AdminUser) {
+    if (admin.role !== 'platform') throw new RuleError('forbidden', 'Only WhatBox can do this.', 403);
+  }
+
+  private normDomains(list: unknown): string[] {
+    if (!Array.isArray(list)) throw new RuleError('bad_domain', 'Domains must be a list.');
+    const out = [...new Set(list.map((d) => String(d).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '')).filter(Boolean))];
+    for (const d of out) if (!/^(?=.{3,253}$)([a-z0-9-]{1,63}\.)+[a-z]{2,63}$/.test(d) && d !== 'localhost') throw new RuleError('bad_domain', `"${d}" is not a valid domain.`);
+    return out;
+  }
+
+  private async assertDomainsFree(domains: string[], siteId: string) {
+    for (const other of await this.deps.control.listSites()) {
+      if (other.id === siteId) continue;
+      const clash = domains.find((d) => other.domains.includes(d) || other.slug === d);
+      if (clash) throw new RuleError('domain_taken', `${clash} already belongs to ${other.name}.`, 409);
+    }
+  }
+
+  static estimateCents(lic: SiteLicensing, usage: Partial<Record<UsageKind, number>>) {
+    if (lic.owned) return 0;
+    let c = lic.baseMonthlyCents;
+    for (const [k, q] of Object.entries(usage)) c += (lic.ratesCents[k as UsageKind] ?? 0) * (q ?? 0);
+    return Math.round(c);
+  }
+
+  async platformOverview(admin: AdminUser, month?: string): Promise<PlatformOverview> {
+    this.requirePlatform(admin);
+    const now = this.now();
+    const m = month && /^\d{4}-\d{2}$/.test(month) ? month : now.toISOString().slice(0, 7);
+    const since = m + '-01T00:00:00.000Z';
+    const [y, mo] = m.split('-').map(Number);
+    const until = new Date(Date.UTC(y, mo, 1)).toISOString();
+    const usage = (await this.deps.control.usageSummary(since, until));
+    const sites: PlatformSiteRow[] = [];
+    for (const site of await this.deps.control.listSites()) {
+      const u: Partial<Record<UsageKind, number>> = {};
+      for (const r of usage) if (r.siteId === site.id) u[r.kind] = r.qty;
+      let members = 0;
+      try { members = (await (await this.repo(site)).stats(this.iso())).members; } catch { /* database not reachable */ }
+      const licensing = site.licensing ?? DEFAULT_LICENSING;
+      sites.push({
+        id: site.id, slug: site.slug, name: site.name, mode: site.settings.mode, status: site.status ?? 'active',
+        domains: site.domains, ownerIds: site.ownerIds, members, usage: u, licensing, estimateCents: Platform.estimateCents(licensing, u),
+      });
+    }
+    const owners = (await this.deps.control.listAdmins()).sort((a, b) => a.email.localeCompare(b.email));
+    return { month: m, sites, owners };
+  }
+
+  async platformCreateSite(admin: AdminUser, input: NewSiteInput): Promise<Site> {
+    this.requirePlatform(admin);
+    const slug = String(input.slug ?? '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9]{1,29}$/.test(slug)) throw new RuleError('bad_slug', 'Short name: 2 to 30 lowercase letters or digits, starting with a letter.');
+    const id = 'site_' + slug;
+    const all = await this.deps.control.listSites();
+    if (all.some((x) => x.id === id || x.slug === slug)) throw new RuleError('slug_taken', 'That short name is taken.', 409);
+    const name = String(input.name ?? '').trim();
+    if (!name) throw new RuleError('bad_name', 'Give the site a name.');
+    const domains = this.normDomains(input.domains ?? []);
+    await this.assertDomainsFree(domains, id);
+    const mode: SiteMode = ['standard', 'sensitive', 'adult'].includes(input.mode) ? input.mode : 'standard';
+    const tpl = all.find((x) => x.id === input.templateSiteId) ?? all.find((x) => x.settings.mode === mode) ?? all[0];
+    if (!tpl) throw new RuleError('no_template', 'Create the first site from the seed.');
+    const admins = await this.deps.control.listAdmins();
+    const ownerIds = (input.ownerIds ?? []).filter((oid) => admins.some((a) => a.id === oid && a.role === 'owner'));
+    // Fail early if this site has no encryption key yet (production keys live in Key Vault).
+    try { await this.keys.siteKey(id); } catch {
+      throw new RuleError('no_key', `Add an encryption key for ${id} to Key Vault (SITE_KEYS_JSON), then try again.`, 409);
+    }
+    const settings: SiteSettings = {
+      ...structuredClone(tpl.settings), mode,
+      paymentProvider: 'none', paymentPlans: undefined,
+      billingDescriptor: name.toUpperCase().replace(/[^A-Z0-9 ]/g, '').slice(0, 22) || 'WHATBOX',
+      publicTeasers: mode === 'sensitive' ? false : tpl.settings.publicTeasers,
+      explicitPhotosAllowed: false,
+      membership: { ...structuredClone(tpl.settings.membership), paywallEnabled: false },
+    };
+    const site: Site = {
+      id, slug, name, domains, tagline: String(input.tagline ?? '').trim() || tpl.tagline, audience: String(input.audience ?? '').trim() || tpl.audience,
+      theme: structuredClone(tpl.theme), settings, fields: structuredClone(tpl.fields), ownerIds, createdAt: this.iso(),
+      status: 'active', licensing: { ...DEFAULT_LICENSING },
+    };
+    await this.deps.provisioner?.provision(site);
+    await this.deps.control.saveSite(site);
+    for (const oid of ownerIds) {
+      const a = admins.find((x) => x.id === oid)!;
+      if (!a.siteIds.includes(id)) await this.deps.control.saveAdmin({ ...a, siteIds: [...a.siteIds, id] });
+    }
+    this.changed();
+    return site;
+  }
+
+  async platformUpdateSite(admin: AdminUser, siteId: string, patch: { name?: string; domains?: string[]; status?: SiteStatus; licensing?: Partial<SiteLicensing> }): Promise<Site> {
+    this.requirePlatform(admin);
+    const site = await this.deps.control.getSite(siteId);
+    if (!site) throw new RuleError('not_found', 'Site not found.', 404);
+    if (patch.name !== undefined) { const n = String(patch.name).trim(); if (!n) throw new RuleError('bad_name', 'Give the site a name.'); site.name = n; }
+    if (patch.domains !== undefined) {
+      const d = this.normDomains(patch.domains);
+      await this.assertDomainsFree(d, site.id);
+      site.domains = d;
+    }
+    if (patch.status !== undefined) {
+      if (patch.status !== 'active' && patch.status !== 'suspended') throw new RuleError('bad_status', 'Unknown status.');
+      site.status = patch.status;
+    }
+    if (patch.licensing) {
+      const cur = site.licensing ?? DEFAULT_LICENSING;
+      const base = patch.licensing.baseMonthlyCents ?? cur.baseMonthlyCents;
+      if (!Number.isFinite(base) || base < 0) throw new RuleError('bad_fee', 'Base fee must be zero or more.');
+      const rates: Partial<Record<UsageKind, number>> = { ...cur.ratesCents };
+      for (const [k, v] of Object.entries(patch.licensing.ratesCents ?? {})) {
+        if (!Number.isFinite(v) || (v as number) < 0) throw new RuleError('bad_rate', 'Rates must be zero or more.');
+        rates[k as UsageKind] = v as number;
+      }
+      site.licensing = { owned: patch.licensing.owned ?? cur.owned, baseMonthlyCents: Math.round(base), ratesCents: rates };
+    }
+    await this.deps.control.saveSite(site);
+    this.changed();
+    return site;
+  }
+
+  async platformSaveOwner(admin: AdminUser, input: { id?: string; email: string; name: string; siteIds: string[] }): Promise<AdminUser> {
+    this.requirePlatform(admin);
+    const email = String(input.email ?? '').trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new RuleError('bad_email', 'Enter a valid email address.');
+    const name = String(input.name ?? '').trim() || email.split('@')[0];
+    const sites = await this.deps.control.listSites();
+    const siteIds = [...new Set(input.siteIds ?? [])].filter((sid) => sites.some((x) => x.id === sid));
+    const byEmail = await this.deps.control.getAdminByEmail(email);
+    let a: AdminUser;
+    if (input.id) {
+      const cur = await this.deps.control.getAdmin(input.id);
+      if (!cur) throw new RuleError('not_found', 'Owner not found.', 404);
+      if (cur.role !== 'owner') throw new RuleError('forbidden', 'Platform admins are managed separately.', 403);
+      if (byEmail && byEmail.id !== cur.id) throw new RuleError('email_taken', 'Another admin already uses that email.', 409);
+      a = { ...cur, email, name, siteIds };
+    } else {
+      if (byEmail) throw new RuleError('email_taken', 'Another admin already uses that email.', 409);
+      a = { id: randomId('adm_'), email, name, role: 'owner', siteIds };
+    }
+    await this.deps.control.saveAdmin(a);
+    // Keep each site's owner list in step.
+    for (const site of sites) {
+      const has = site.ownerIds.includes(a.id), should = siteIds.includes(site.id);
+      if (has !== should) await this.deps.control.saveSite({ ...site, ownerIds: should ? [...site.ownerIds, a.id] : site.ownerIds.filter((x) => x !== a.id) });
+    }
+    this.changed();
+    return a;
+  }
+
+  async platformDeleteOwner(admin: AdminUser, ownerId: string) {
+    this.requirePlatform(admin);
+    const a = await this.deps.control.getAdmin(ownerId);
+    if (!a) throw new RuleError('not_found', 'Owner not found.', 404);
+    if (a.role !== 'owner') throw new RuleError('forbidden', 'Platform admins are managed separately.', 403);
+    for (const site of await this.deps.control.listSites()) {
+      if (site.ownerIds.includes(a.id)) await this.deps.control.saveSite({ ...site, ownerIds: site.ownerIds.filter((x) => x !== a.id) });
+    }
+    await this.deps.control.deleteAdmin(a.id);
     this.changed();
     return { ok: true };
   }

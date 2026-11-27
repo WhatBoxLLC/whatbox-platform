@@ -10,6 +10,7 @@ import { Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-na
 import Svg, { Circle } from 'react-native-svg';
 import { adminApi, IS_PREVIEW } from '../../lib/backend';
 import { storage } from '../../lib/storage';
+import { PlatformPanel } from '../../ui/PlatformPanel';
 import {
   Avatar, Badge, Btn, Card, Check, Chip, ChipPicker, ErrorText, Field, fonts, H, Icon, Loading, Notice, PhotoTile,
   relTime, Segmented, ThemeOverrideProvider, Toggle, Txt, useTheme, useWide, type IconName,
@@ -57,7 +58,7 @@ function Admin() {
 
   if (!checked || !api) return <Loading />;
   if (!me) return <AdminLogin api={api} onIn={async (token) => { api.setToken(token); await storage.set(TOKEN_KEY, token); setMe(await api.me()); }} />;
-  return <Dashboard api={api} me={me} onOut={async () => { await storage.set(TOKEN_KEY, null); setMe(null); }} />;
+  return <Dashboard api={api} me={me} reload={async () => setMe(await api.me())} onOut={async () => { await storage.set(TOKEN_KEY, null); setMe(null); }} />;
 }
 
 function AdminLogin({ api, onIn }: { api: AdminApi; onIn: (token: string) => Promise<void> }) {
@@ -109,11 +110,15 @@ function WhatBoxMark() {
   );
 }
 
-function Dashboard({ api, me, onOut }: { api: AdminApi; me: Awaited<ReturnType<AdminApi['me']>>; onOut: () => void }) {
+function Dashboard({ api, me, reload, onOut }: { api: AdminApi; me: Awaited<ReturnType<AdminApi['me']>>; reload: () => void; onOut: () => void }) {
   const t = useTheme();
   const wide = useWide(980);
   const [siteId, setSiteId] = useState(me.sites[0]?.id);
   const [tab, setTab] = useState<Tab>('overview');
+  const isPlatform = me.admin.role === 'platform';
+  const [platformView, setPlatformView] = useState(isPlatform);
+  const pickSite = (id: string) => { setSiteId(id); setPlatformView(false); };
+  const pickTab = (k: Tab) => { setTab(k); setPlatformView(false); };
   const [site, setSite] = useState<Site | null>(null);
   const [stats, setStats] = useState<SiteStats | null>(null);
   const reloadStats = useCallback(() => { if (siteId) api.stats(siteId).then(setStats); }, [api, siteId]);
@@ -128,15 +133,21 @@ function Dashboard({ api, me, onOut }: { api: AdminApi; me: Awaited<ReturnType<A
   const nav = (
     <View style={{ gap: 18 }}>
       <WhatBoxMark />
+      {isPlatform ? (
+        <Pressable onPress={() => setPlatformView(true)} aria-current={platformView ? 'page' : undefined} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, minHeight: 42, borderRadius: 10, backgroundColor: platformView ? t.accentSoft : 'transparent' }}>
+          <Icon name="grid" size={18} color={platformView ? t.accent : t.sub} />
+          <Txt bold={platformView} size={15} color={platformView ? t.accent : t.ink}>All sites and owners</Txt>
+        </Pressable>
+      ) : null}
       <View style={{ gap: 6 }}>
         <Txt sub size={12} bold style={{ letterSpacing: 0.6 }}>SITES</Txt>
-        {me.sites.map((s) => <SitePill key={s.id} s={s} on={s.id === siteId} onPress={() => setSiteId(s.id)} />)}
+        {me.sites.map((s) => <SitePill key={s.id} s={s} on={!platformView && s.id === siteId} onPress={() => pickSite(s.id)} />)}
       </View>
       <View style={{ gap: 2 }}>
         {TABS.map((tb) => {
-          const on = tb.key === tab;
+          const on = !platformView && tb.key === tab;
           return (
-            <Pressable key={tb.key} onPress={() => setTab(tb.key)} aria-current={on ? 'page' : undefined} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, minHeight: 42, borderRadius: 10, backgroundColor: on ? t.accentSoft : 'transparent' }}>
+            <Pressable key={tb.key} onPress={() => pickTab(tb.key)} aria-current={on ? 'page' : undefined} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, minHeight: 42, borderRadius: 10, backgroundColor: on ? t.accentSoft : 'transparent' }}>
               <Icon name={tb.icon} size={18} color={on ? t.accent : t.sub} />
               <Txt bold={on} size={15} color={on ? t.accent : t.ink}>{tb.label}</Txt>
               {tb.key === 'moderation' && stats?.openModeration ? <View style={{ marginLeft: 'auto' }}><Badge label={String(stats.openModeration)} tone="alert" /></View> : null}
@@ -158,12 +169,21 @@ function Dashboard({ api, me, onOut }: { api: AdminApi; me: Awaited<ReturnType<A
         <ScrollView style={{ width: 260, flexGrow: 0, backgroundColor: t.surface, borderRightWidth: 1, borderColor: t.line }} contentContainerStyle={{ padding: 20 }}>{nav}</ScrollView>
       ) : (
         <View style={{ backgroundColor: t.surface, borderBottomWidth: 1, borderColor: t.line, padding: 12, gap: 10 }}>
-          <ScrollView horizontal contentContainerStyle={{ gap: 8 }}>{me.sites.map((s) => <SitePill key={s.id} s={s} on={s.id === siteId} onPress={() => setSiteId(s.id)} />)}</ScrollView>
-          <ScrollView horizontal contentContainerStyle={{ gap: 6 }}>{TABS.map((tb) => <Chip key={tb.key} label={tb.label + (tb.key === 'moderation' && stats?.openModeration ? ` · ${stats.openModeration}` : '')} selected={tb.key === tab} onPress={() => setTab(tb.key)} />)}</ScrollView>
+          <ScrollView horizontal contentContainerStyle={{ gap: 8 }}>
+            {isPlatform ? <Chip label="All sites" selected={platformView} onPress={() => setPlatformView(true)} /> : null}
+            {me.sites.map((s) => <SitePill key={s.id} s={s} on={!platformView && s.id === siteId} onPress={() => pickSite(s.id)} />)}
+          </ScrollView>
+          {!platformView ? <ScrollView horizontal contentContainerStyle={{ gap: 6 }}>{TABS.map((tb) => <Chip key={tb.key} label={tb.label + (tb.key === 'moderation' && stats?.openModeration ? ` · ${stats.openModeration}` : '')} selected={tb.key === tab} onPress={() => pickTab(tb.key)} />)}</ScrollView> : null}
         </View>
       )}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: wide ? 32 : 16, paddingBottom: 64 }}>
         <View style={{ maxWidth: 1040, width: '100%', gap: 20 }}>
+          {platformView ? (
+            <>
+              <H size={28}>WhatBox platform</H>
+              <PlatformPanel api={api} onSitesChanged={reload} />
+            </>
+          ) : (<>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <H size={28}>{TABS.find((x) => x.key === tab)!.label}</H>
             {current ? <Badge label={`${current.name} · ${current.domain}`} /> : null}
@@ -179,6 +199,7 @@ function Dashboard({ api, me, onOut }: { api: AdminApi; me: Awaited<ReturnType<A
               {tab === 'settings' ? <Settings api={api} site={site} onSite={setSite} role={me.admin.role} /> : null}
             </>
           )}
+          </>)}
         </View>
       </ScrollView>
     </View>

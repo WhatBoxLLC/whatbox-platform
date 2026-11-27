@@ -371,3 +371,56 @@ test('usage is metered per site for codes', async () => {
   const rows = await mp.control.usageSummary('2000-01-01');
   assert.ok(rows.some((r) => r.kind === 'email' && r.qty >= 1 && r.siteId.includes('afterh')));
 });
+
+async function adminSignIn(mp: Awaited<ReturnType<typeof createMemoryPlatform>>, email: string) {
+  const a = createLocalAdminApi(mp.platform);
+  const st = await a.start(email);
+  a.setToken((await a.verify(st.challengeId, st.devCode!)).token);
+  return a;
+}
+
+test('platform admin: create a site, assign an owner, suspend, usage and estimate', async () => {
+  const mp = await createMemoryPlatform();
+  const owner = await adminSignIn(mp, DEMO_OWNER_EMAIL);
+  await assert.rejects(owner.platform(), (e: ApiError) => e.status === 403);
+  await assert.rejects(owner.createSite({ slug: 'x', name: 'X', domains: [], mode: 'standard', ownerIds: [] }), (e: ApiError) => e.status === 403);
+
+  const pa = await adminSignIn(mp, 'admin@whatbox.test');
+  await assert.rejects(pa.createSite({ slug: 'swing', name: 'Swing', domains: ['afterh.com'], mode: 'adult', ownerIds: [] }), (e: ApiError) => e.code === 'domain_taken');
+  const newOwner = await pa.saveOwner({ email: 'Pat@Example.com', name: 'Pat', siteIds: [] });
+  const site = await pa.createSite({ slug: 'swingandscore', name: 'SwingAndScore', domains: ['https://www.SwingAndScore.com/'], mode: 'adult', ownerIds: [newOwner.id] });
+  assert.deepEqual(site.domains, ['swingandscore.com']);
+  assert.equal(site.settings.membership.paywallEnabled, false);
+  assert.equal(site.settings.explicitPhotosAllowed, false);
+  assert.equal(site.settings.paymentProvider, 'none');
+
+  // The new owner sees only the new site
+  const pat = await adminSignIn(mp, 'pat@example.com');
+  assert.deepEqual((await pat.me()).sites.map((x) => x.slug), ['swingandscore']);
+  await assert.rejects(pat.updateSite(site.id, { settings: { paymentProvider: 'paypal' } }), (e: ApiError) => e.code === 'provider_not_allowed');
+
+  // Members can sign up on the new site, and its data is separate
+  const m = createLocalMemberApi(mp.platform, 'swingandscore.com', 'web');
+  const st = await m.startVerification('email', 'new@example.com');
+  m.setToken((await m.verify(st.challengeId, st.devCode!)).token);
+  assert.equal((await m.site()).name, 'SwingAndScore');
+
+  // Suspend: members are turned away, admins still see it
+  await pa.platformUpdateSite(site.id, { status: 'suspended' });
+  await assert.rejects(m.site(), (e: ApiError) => e.status === 503);
+  await pa.platformUpdateSite(site.id, { status: 'active' });
+  await m.site();
+
+  // Usage and the monthly estimate
+  await pa.platformUpdateSite(site.id, { licensing: { owned: false, baseMonthlyCents: 5000, ratesCents: { email: 1 } } });
+  const ov = await pa.platform();
+  const row = ov.sites.find((x) => x.id === site.id)!;
+  assert.equal(row.usage.email, 1);
+  assert.equal(row.estimateCents, 5001);
+  assert.ok(ov.owners.some((o) => o.email === 'pat@example.com'));
+
+  // Removing the owner takes them off the site
+  await pa.deleteOwner(newOwner.id);
+  assert.deepEqual((await pa.platform()).sites.find((x) => x.id === site.id)!.ownerIds, []);
+  await assert.rejects(pat.me(), (e: ApiError) => e.status === 401);
+});

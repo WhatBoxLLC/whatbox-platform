@@ -1,8 +1,8 @@
 // In-memory repositories. Used by tests and by the browser preview, where state is
 // snapshotted to localStorage. Each site gets its own MemorySiteRepo instance, mirroring
 // the one-database-per-site layout of production.
-import type { AdminChallenge, AdminSession, ControlRepo, UsageKind, MemberQuery, MemberSession, SiteRepo } from './repo';
-import type {
+import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
+import type { UsageKind,
   AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
   PrivateAccess, PushToken, Report, Subscription, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
@@ -33,6 +33,12 @@ export class MemoryControlRepo implements ControlRepo {
     if (i >= 0) this.sites[i] = clone(site);
     else this.sites.push(clone(site));
   }
+  async listAdmins() { return clone(this.admins); }
+  async saveAdmin(a: AdminUser) { this.admins = [...this.admins.filter((x) => x.id !== a.id), clone(a)]; }
+  async deleteAdmin(id: string) {
+    this.admins = this.admins.filter((x) => x.id !== id);
+    this.sessions = this.sessions.filter((x) => x.adminId !== id);
+  }
   async getAdmin(id: string) { return clone(this.admins.find((a) => a.id === id) ?? null); }
   async getAdminByEmail(email: string) {
     return clone(this.admins.find((a) => a.email.toLowerCase() === email.toLowerCase()) ?? null);
@@ -47,9 +53,9 @@ export class MemoryControlRepo implements ControlRepo {
   async deleteAdminChallenge(id: string) { this.challenges.delete(id); }
   usage: { siteId: string; kind: UsageKind; qty: number; at: string }[] = [];
   async recordUsage(siteId: string, kind: UsageKind, qty: number, at: string) { this.usage.push({ siteId, kind, qty, at }); }
-  async usageSummary(since: string) {
+  async usageSummary(since: string, until = '9999') {
     const m = new Map<string, { siteId: string; kind: UsageKind; qty: number }>();
-    for (const u of this.usage) if (u.at >= since) {
+    for (const u of this.usage) if (u.at >= since && u.at < until) {
       const k = u.siteId + '|' + u.kind;
       const row = m.get(k) ?? { siteId: u.siteId, kind: u.kind, qty: 0 };
       row.qty += u.qty;

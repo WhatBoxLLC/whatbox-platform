@@ -12,8 +12,13 @@ done
 az group create -n "$RG" -l "$LOC" -o none
 APP=$(az ad app create --display-name "github-whatbox-$ENV" --query appId -o tsv)
 az ad sp create --id "$APP" -o none 2>/dev/null || true
-az ad app federated-credential create --id "$APP" --parameters \
-  "{\"name\":\"github-$ENV\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"repo:$REPO:environment:$ENV\",\"audiences\":[\"api://AzureADTokenExchange\"]}" -o none
+# GitHub signs tokens for this repo with its owner and repo ids in the subject
+# (WhatBoxLLC = 361781416, whatbox-platform = 1473883584). Trust both forms.
+for SUBJ in "repo:$REPO:environment:$ENV" "repo:WhatBoxLLC@361781416/whatbox-platform@1473883584:environment:$ENV"; do
+  N="github-$ENV-$(echo "$SUBJ" | md5sum | cut -c1-6)"
+  az ad app federated-credential create --id "$APP" --parameters \
+    "{\"name\":\"$N\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"$SUBJ\",\"audiences\":[\"api://AzureADTokenExchange\"]}" -o none
+done
 sleep 20 # let the new identity appear before granting it access
 SCOPE="/subscriptions/$SUB/resourceGroups/$RG"
 az role assignment create --assignee "$APP" --role Contributor --scope "$SCOPE" -o none

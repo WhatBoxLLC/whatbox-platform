@@ -24,21 +24,16 @@ logs). Web and the member app scale to zero in dev.
 
 ## First-time setup (once per environment)
 
-1. Create a resource group, e.g. `az group create -n whatbox-dev -l centralus`.
-2. Create an Entra app registration for GitHub with a federated credential for this repo's
-   `dev` (and later `prod`) environment, and give it **Contributor** and **User Access
-   Administrator** on the resource group (the template assigns roles to its managed identity).
-3. In GitHub → Settings → Environments → `dev`, add:
-   - Variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`
-   - Secrets: `PG_ADMIN_PASSWORD` (long random), and optionally `PAYPAL_JSON`, `OAUTH_CLIENTS_JSON`, `EXPO_ACCESS_TOKEN`
-4. Run the **Deploy to Azure** workflow once. It stops at "Check site encryption keys exist"
-   and prints the command to run next.
-5. Create the site encryption keys straight into Key Vault (never through GitHub):
-   ```
-   infra/scripts/bootstrap-secrets.sh <key-vault-name> site_afterh site_hfriends site_datealittle
-   ```
-   Back up the vault. Losing a site's key makes its members' encrypted contact details unreadable.
-6. Run the workflow again. It builds the images, deploys the apps and runs migrations.
+1. In the Azure portal, open **Cloud Shell** (Bash) and run `infra/scripts/setup-azure.sh dev`
+   (paste its contents). It creates the resource group and lets this repo's GitHub Actions deploy,
+   using OIDC so no Azure password is stored in GitHub. It prints five values.
+2. In GitHub → Settings → Environments, create `dev` and add the four printed variables and the
+   `PG_ADMIN_PASSWORD` secret. Optional secrets: `PAYPAL_JSON`, `OAUTH_CLIENTS_JSON`, `EXPO_ACCESS_TOKEN`.
+3. Run **Deploy to Azure** from the Actions tab. It creates everything, generates each site's
+   encryption key straight into Key Vault (never shown or stored in GitHub), builds the images,
+   deploys the apps and runs migrations. The first run takes about 20 to 30 minutes.
+
+Back up the Key Vault: losing a site's key makes its members' encrypted contact details unreadable.
 
 Every push to `main` then redeploys `dev`. `prod` is deployed by hand from the Actions tab.
 

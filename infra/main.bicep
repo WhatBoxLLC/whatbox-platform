@@ -6,8 +6,8 @@
 // Deploy in two passes (the GitHub workflow does this):
 //   1. deployApps=false  -> registry, Key Vault, Postgres, Storage, Communication Services
 //   2. build images into the registry, then deployApps=true -> Container Apps and jobs
-// Before the first pass with deployApps=true, run infra/scripts/bootstrap-secrets.sh once to put
-// the per-site encryption keys into Key Vault. They are never passed through this template.
+// Between the passes the workflow creates any missing per-site encryption keys directly in Key Vault
+// (infra/scripts/bootstrap-secrets.sh). They are never passed through this template.
 
 targetScope = 'resourceGroup'
 
@@ -20,6 +20,9 @@ param prefix string = 'whatbox'
 @description('Set false for the first pass, before images exist in the registry.')
 param deployApps bool = true
 param imageTag string = 'latest'
+
+@description('Object id of the GitHub deploy identity. It may create missing site encryption keys in Key Vault (never read out to GitHub logs).')
+param deployerObjectId string = ''
 
 param postgresAdminLogin string = 'whatboxadmin'
 @secure()
@@ -102,6 +105,13 @@ resource kvRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: kv
   name: guid(kv.id, identity.id, kvSecretsUserRole)
   properties: { roleDefinitionId: kvSecretsUserRole, principalId: identity.properties.principalId, principalType: 'ServicePrincipal' }
+}
+
+var kvSecretsOfficerRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
+resource kvDeployer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerObjectId)) {
+  scope: kv
+  name: guid(kv.id, deployerObjectId, kvSecretsOfficerRole)
+  properties: { roleDefinitionId: kvSecretsOfficerRole, principalId: deployerObjectId, principalType: 'ServicePrincipal' }
 }
 
 // ---------- PostgreSQL: one server, a control database plus one database per site ----------

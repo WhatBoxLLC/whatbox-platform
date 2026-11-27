@@ -46,8 +46,10 @@ jobs:
       - name: Infrastructure (registry, vault, database, storage, email)
         id: base
         run: |
+          deployer=$(az ad sp show --id "${{ vars.AZURE_CLIENT_ID }}" --query id -o tsv)
+          echo "deployer=$deployer" >> "$GITHUB_OUTPUT"
           out=$(az deployment group create -g "$RG" -f infra/main.bicep --name "base-$TAG" \
-            -p env="$ENV" deployApps=false postgresAdminPassword="$PG_PW" \
+            -p env="$ENV" deployApps=false deployerObjectId="$deployer" postgresAdminPassword="$PG_PW" \
                paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" \
             --query properties.outputs -o json)
           echo "acr=$(jq -r .acrName.value <<<"$out")" >> "$GITHUB_OUTPUT"
@@ -59,12 +61,14 @@ jobs:
           OAUTH_JSON: ${{ secrets.OAUTH_CLIENTS_JSON || '{}' }}
           EXPO_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
 
-      - name: Check site encryption keys exist
+      - name: Site encryption keys (created in Key Vault if missing, never printed)
         run: |
-          if ! az keyvault secret show --vault-name "${{ steps.base.outputs.kv }}" --name site-keys-json --query id -o tsv >/dev/null 2>&1; then
-            echo "::error::Run infra/scripts/bootstrap-secrets.sh ${{ steps.base.outputs.kv }} site_afterh site_hfriends site_datealittle first."
-            exit 1
-          fi
+          # A new role assignment can take a few minutes to apply.
+          for i in $(seq 1 20); do
+            infra/scripts/bootstrap-secrets.sh "${{ steps.base.outputs.kv }}" site_afterh site_hfriends site_datealittle && exit 0
+            echo "waiting for Key Vault access…"; sleep 30
+          done
+          exit 1
 
       - name: Build images in Azure Container Registry
         run: |
@@ -78,7 +82,7 @@ jobs:
       - name: Container apps
         run: |
           az deployment group create -g "$RG" -f infra/main.bicep --name "apps-$TAG" \
-            -p env="$ENV" deployApps=true imageTag="$TAG" postgresAdminPassword="$PG_PW" \
+            -p env="$ENV" deployApps=true imageTag="$TAG" deployerObjectId="${{ steps.base.outputs.deployer }}" postgresAdminPassword="$PG_PW" \
                paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" -o none
         env:
           PG_PW: ${{ secrets.PG_ADMIN_PASSWORD }}

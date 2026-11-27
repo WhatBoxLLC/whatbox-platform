@@ -9,7 +9,11 @@ set -euo pipefail
 KV="${1:?Key Vault name}"; shift
 SITES=("__admin__" "$@")
 
-current="$(az keyvault secret show --vault-name "$KV" --name site-keys-json --query value -o tsv 2>/dev/null || echo '{}')"
+# Only start from {} when the secret truly doesn't exist. Any other error (no access yet, network)
+# stops here, so existing keys are never replaced.
+if ! current="$(az keyvault secret show --vault-name "$KV" --name site-keys-json --query value -o tsv 2>/tmp/kv-err)"; then
+  if grep -q "SecretNotFound" /tmp/kv-err; then current='{}'; else cat /tmp/kv-err >&2; exit 1; fi
+fi
 updated="$(python3 - "$current" "${SITES[@]}" <<'PY'
 import json, secrets, sys
 keys = json.loads(sys.argv[1] or '{}')

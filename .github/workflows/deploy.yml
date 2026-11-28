@@ -96,10 +96,18 @@ jobs:
 
       - name: Container apps
         run: |
+          set -o pipefail
+          # Keep custom domains bound by infra/scripts/add-domain.sh (or the Custom domains workflow).
+          # Without this, a redeploy would drop them along with their certificates.
+          # An app that doesn't exist yet (first deploy) has none. A failed lookup stops the deploy.
+          domains() { az containerapp list -g "$RG" --query "[?name=='$1'] | [0].properties.configuration.ingress.customDomains || \`[]\`" -o json | jq -c .; }
+          web_domains=$(domains "whatbox-$ENV-web")
+          app_domains=$(domains "whatbox-$ENV-app")
+          echo "keeping $(jq length <<<"$web_domains") public site and $(jq length <<<"$app_domains") member app domain(s)"
           az deployment group create -g "$RG" -f infra/main.bicep --name "apps-$TAG" \
             -p env="$ENV" deployApps=true imageTag="$TAG" deployerObjectId="${{ steps.base.outputs.deployer }}" postgresAdminPassword="$PG_PW" \
                paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" \
-               seedAdminEmail="$ADMIN_EMAIL" -o none
+               seedAdminEmail="$ADMIN_EMAIL" webCustomDomains="$web_domains" appCustomDomains="$app_domains" -o none
         env:
           PG_PW: ${{ secrets.PG_ADMIN_PASSWORD }}
           PAYPAL_JSON: ${{ secrets.PAYPAL_JSON || '{}' }}

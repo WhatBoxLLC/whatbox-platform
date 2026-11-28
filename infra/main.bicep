@@ -40,6 +40,11 @@ param extraCorsOrigins string = ''
 @description('SMS sender numbers JSON, e.g. {"*":"+18005550100"}, once a number is bought in Communication Services.')
 param acsSmsFromJson string = ''
 
+@description('Custom domains already bound to the public site app, as the deploy workflow reads them back from Azure. Passed in so a redeploy keeps every domain and certificate that infra/scripts/add-domain.sh bound.')
+param webCustomDomains array = []
+@description('Custom domains already bound to the member app (app.<domain>). Same as webCustomDomains.')
+param appCustomDomains array = []
+
 @description('Dev only: email of a person to add as Platform Admin when the demo seed job runs.')
 param seedAdminEmail string = ''
 
@@ -392,7 +397,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
   properties: {
     managedEnvironmentId: cae.id
     configuration: {
-      ingress: { external: true, targetPort: 3000, transport: 'auto', allowInsecure: false }
+      ingress: { external: true, targetPort: 3000, transport: 'auto', allowInsecure: false, customDomains: webCustomDomains }
       registries: registries
     }
     template: {
@@ -423,7 +428,7 @@ resource member 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
   properties: {
     managedEnvironmentId: cae.id
     configuration: {
-      ingress: { external: true, targetPort: 8080, transport: 'auto', allowInsecure: false }
+      ingress: { external: true, targetPort: 8080, transport: 'auto', allowInsecure: false, customDomains: appCustomDomains }
       registries: registries
     }
     template: {
@@ -440,6 +445,11 @@ resource member 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
   }
 }
 
+// For custom domains: the TXT verification value and the addresses DNS points at on go-live day.
+output customDomainVerificationId string = deployApps ? web!.properties.customDomainVerificationId : ''
+output staticIp string = cae.properties.staticIp
+output webFqdn string = '${name}-web.${cae.properties.defaultDomain}'
+output appFqdn string = memberHost
 output acrName string = acr.name
 output acrLoginServer string = acr.properties.loginServer
 output keyVaultName string = kv.name

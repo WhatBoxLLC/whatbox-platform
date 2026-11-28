@@ -1,4 +1,4 @@
-import { ApiError, DEFAULT_NOTIFY, DEFAULT_STRICT, GENDERS, type NotifyPrefs, type AccessRow, type Gender, type Member, type StrictPrefs } from '@whatbox/core';
+import { ApiError, DEFAULT_NOTIFY, DEFAULT_STRICT, GENDERS, type NotifyPrefs, type AccessRow, type Gender, type Member, type HiddenPrefs, type StrictPrefs } from '@whatbox/core';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
@@ -54,6 +54,7 @@ function ProfileTab() {
   const [ageMax, setAgeMax] = useState(String(m.ageMax));
   const [miles, setMiles] = useState<number | null>(m.maxMiles === undefined ? 50 : m.maxMiles);
   const [strict, setStrict] = useState<StrictPrefs>({ ...DEFAULT_STRICT, ...m.strict });
+  const [hidden, setHidden] = useState<HiddenPrefs>({ ...m.hiddenPrefs });
   const units = m.unitsResolved;
   const plural = (v: Gender) => GENDERS.find((g) => g.value === v)!.plural;
   const [fields, setFields] = useState<Member['fields']>(m.fields);
@@ -70,11 +71,13 @@ function ProfileTab() {
       <ChipPicker label="Looking for" multi options={GENDERS.map((g) => g.plural)} value={seeking.map(plural)}
         onChange={(ls: string[]) => ls.length && setSeeking(ls.map((l) => GENDERS.find((g) => g.plural === l)!.value))} />
       <Toggle label="Hard limit" value={strict.seeking} onChange={(v) => setStrict({ ...strict, seeking: v })} />
+      <Toggle label="Keep private" hint="Hide who you're looking for on your profile. It still decides who we suggest." value={!!hidden.seeking} onChange={(v) => setHidden({ ...hidden, seeking: v })} />
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <View style={{ flex: 1 }}><Field label="Ages from" value={ageMin} onChangeText={(v) => setAgeMin(v.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" /></View>
         <View style={{ flex: 1 }}><Field label="to" value={ageMax} onChangeText={(v) => setAgeMax(v.replace(/\D/g, '').slice(0, 2))} keyboardType="number-pad" /></View>
       </View>
       <Toggle label="Hard limit" value={strict.age} onChange={(v) => setStrict({ ...strict, age: v })} />
+      <Toggle label="Keep private" hint="Hide your age range on your profile. It still decides who we suggest." value={!!hidden.ages} onChange={(v) => setHidden({ ...hidden, ages: v })} />
       <ChipPicker label="Distance" options={DISTANCE_STEPS.map((d) => distanceLabel(d, units))} value={distanceLabel(miles, units)}
         onChange={(l: string) => setMiles(DISTANCE_STEPS.find((d) => distanceLabel(d, units) === l)!)} />
       <Toggle label="Hard limit" value={strict.distance} onChange={(v) => setStrict({ ...strict, distance: v })} />
@@ -82,13 +85,17 @@ function ProfileTab() {
       <FieldsEditor fields={site.fields} value={fields} onChange={setFields} />
       {msg ? <Notice tone="success" icon="check">{msg}</Notice> : null}
       <ErrorText error={error} />
+      <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
       <Btn label="Save changes" busy={busy} onPress={async () => {
         setBusy(true); setError(null); setMsg(null);
         try {
-          setMe(await api.updateMe({ displayName: name, about, ...(loc ? { location: loc.input } : {}), seeking, ageMin: Number(ageMin) || m.ageMin, ageMax: Number(ageMax) || m.ageMax, maxMiles: miles, strict, fields }));
+          setMe(await api.updateMe({ displayName: name, about, ...(loc ? { location: loc.input } : {}), seeking, ageMin: Number(ageMin) || m.ageMin, ageMax: Number(ageMax) || m.ageMax, maxMiles: miles, strict, hiddenPrefs: hidden, fields }));
           setMsg('Saved.');
         } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not save.'); } finally { setBusy(false); }
       }} />
+      <Btn label="View as others see me" icon="eye" kind="secondary" disabled={!m.profileComplete} onPress={() => router.push('/member/me')} />
+      </View>
+      <Txt sub size={13}>Save first: the preview shows your saved profile.</Txt>
     </Card>
   );
 }

@@ -84,6 +84,7 @@ export class GeoController extends SiteScoped {
 export class MeController extends SiteScoped {
   constructor(@Inject(PLATFORM) p: Platform) { super(p); }
   @Get() async me(@Req() r: Request) { return this.p.myProfile(await this.ctx(r)); }
+  @Get('preview') async preview(@Req() r: Request) { return this.p.previewProfile(await this.ctx(r)); }
   @Patch() async update(@Req() r: Request, @Body() b: any) { return this.p.updateProfile(await this.ctx(r), b); }
   @Post('photos') async addPhoto(@Req() r: Request, @Body() b: any) {
     // JSON route: placeholder tones (tests) or data URIs when PHOTO_STORE=inline. Real files use /photos/upload.

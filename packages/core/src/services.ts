@@ -5,7 +5,7 @@ import { DevKeyProvider, hmacHex, type KeyProvider, randomCode, randomId, SiteCr
 import { builtinGeo, unitsForCountry } from './geo';
 import type { ControlRepo, Clock, EventSink, IdTokenVerifier, Notifier, PaymentGateway, PhotoStore, SiteProvisioner, SiteRepo } from './repo';
 import { systemClock } from './repo';
-import { DEFAULT_LICENSING, DEFAULT_NOTIFY, DEFAULT_STRICT, isGender, type NotifyPrefs, type StrictPrefs } from './types';
+import { DEFAULT_LICENSING, DEFAULT_NOTIFY, DEFAULT_STRICT, isGender, type HiddenPrefs, type NotifyPrefs, type StrictPrefs } from './types';
 import {
   ageFromBirthYear, checkPhotoAllowed, CODE_MAX_ATTEMPTS, CODE_TTL_MS, formatHeight, maskContactInfo, milesBetween,
   ONLINE_WINDOW_MS, PHOTO_LIMITS, effectivePerms, tierFor, photoVisibleTo, RuleError, scoreCandidate, screenMessage,
@@ -58,6 +58,7 @@ export interface ProfilePatch {
   maxMiles?: number | null;
   strict?: Partial<StrictPrefs>;
   notify?: Partial<NotifyPrefs>;
+  hiddenPrefs?: HiddenPrefs;
   about?: string;
   fields?: Member['fields'];
   hideExplicit?: boolean;
@@ -412,6 +413,11 @@ export class Platform {
       for (const k of ['seeking', 'age', 'distance'] as const) if (typeof patch.strict[k] === 'boolean') cur[k] = patch.strict[k]!;
       m.strict = cur;
     }
+    if (patch.hiddenPrefs) {
+      const cur = { ...m.hiddenPrefs };
+      for (const k of ['seeking', 'ages'] as const) if (typeof patch.hiddenPrefs[k] === 'boolean') cur[k] = patch.hiddenPrefs[k];
+      m.hiddenPrefs = cur;
+    }
     if (patch.notify) {
       const cur = { ...DEFAULT_NOTIFY, ...m.notify };
       for (const k of Object.keys(DEFAULT_NOTIFY) as (keyof NotifyPrefs)[]) if (typeof patch.notify[k] === 'boolean') cur[k] = patch.notify[k]!;
@@ -653,9 +659,20 @@ export class Platform {
     this.requireComplete(ctx);
     const m = await this.other(ctx, id);
     await ctx.repo.recordView({ viewerId: ctx.me.id, viewedId: m.id, at: this.iso() });
-    const card = await this.card(ctx, m);
+    return this.buildProfile(ctx, m, false);
+  }
+
+  /** My own profile exactly as another member sees it: approved photos only, private photos locked,
+   *  hidden preferences left out. Nothing is recorded. */
+  async previewProfile(ctx: MemberCtx): Promise<MemberProfile> {
+    this.requireComplete(ctx);
+    return this.buildProfile(ctx, ctx.me, true);
+  }
+
+  private async buildProfile(ctx: MemberCtx, m: Member, preview: boolean): Promise<MemberProfile> {
+    const card = { ...(await this.card(ctx, m)), ...(preview ? { miles: null } : {}) };
     const photos = (await ctx.repo.listPhotos(m.id)).filter((p) => this.visibleToOthers(ctx.site, p));
-    const access = await ctx.repo.getAccess(m.id, ctx.me.id);
+    const access = preview ? null : await ctx.repo.getAccess(m.id, ctx.me.id);
     const unlocked = access?.status === 'granted';
     const blocks = await ctx.repo.listBlocksInvolving(ctx.me.id);
     const details: MemberProfile['details'] = [];
@@ -669,16 +686,20 @@ export class Platform {
       if (def.section === 'interests' && Array.isArray(v)) { interests = interests.concat(v); continue; }
       details.push({ key: def.key, label: def.label, value: this.fieldText(ctx, def, v) });
     }
-    const lock = await this.messageLock(ctx, m.id);
+    const lock = preview ? 'This is a preview of your own profile.' : await this.messageLock(ctx, m.id);
     const privatePhotos = photos.filter((p) => p.kind === 'private');
-    const perms = this.perms(ctx);
+    // A preview shows what a full member sees, so nothing looks missing because of my own level.
+    const perms = preview ? { ...this.perms(ctx), seePublicPhotos: true, requestPrivatePhotos: true } : this.perms(ctx);
     const gallery = photos.filter((p) => p.kind === 'public');
     const ms = ctx.site.settings.membership;
     const hintTier = !perms.seePublicPhotos ? tierFor(ms, (p) => p.seePublicPhotos) : !perms.requestPrivatePhotos ? tierFor(ms, (p) => p.requestPrivatePhotos) : null;
     this.changed();
     return {
       ...card,
-      about: m.about, gender: m.gender, seeking: m.seeking, ageMin: m.ageMin, ageMax: m.ageMax, lastActiveAt: m.lastActiveAt,
+      about: m.about, gender: m.gender, lastActiveAt: m.lastActiveAt,
+      ...(m.hiddenPrefs?.seeking ? {} : { seeking: m.seeking }),
+      ...(m.hiddenPrefs?.ages ? {} : { ageMin: m.ageMin, ageMax: m.ageMax }),
+      ...(preview ? { preview: true } : {}),
       details, cautions, interests,
       publicPhotos: perms.seePublicPhotos ? gallery.map((p) => this.photoView(ctx, p, { owner: false })) : [],
       publicPhotosLocked: perms.seePublicPhotos ? 0 : gallery.length,
@@ -689,8 +710,8 @@ export class Platform {
       privatePhotoCount: privatePhotos.length,
       privateAccess: access?.status ?? 'none',
       verified: !!m.verifiedAt,
-      blockedByMe: blocks.some((b) => b.blockerId === ctx.me.id && b.blockedId === m.id),
-      favoritedByMe: (await ctx.repo.listFavoritesFrom(ctx.me.id)).some((f) => f.toId === m.id),
+      blockedByMe: !preview && blocks.some((b) => b.blockerId === ctx.me.id && b.blockedId === m.id),
+      favoritedByMe: !preview && (await ctx.repo.listFavoritesFrom(ctx.me.id)).some((f) => f.toId === m.id),
       canMessage: !lock,
       messageLockReason: lock,
     };

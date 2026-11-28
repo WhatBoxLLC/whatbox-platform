@@ -185,6 +185,8 @@ export interface Member {
   strict?: StrictPrefs;
   /** Push notification choices; defaults in DEFAULT_NOTIFY. */
   notify?: Partial<NotifyPrefs>;
+  /** Preferences kept off their profile. They still decide who is suggested to them. */
+  hiddenPrefs?: HiddenPrefs;
   about: string;
   fields: Record<string, string | string[] | number | boolean>;
   status: MemberStatus;
@@ -331,12 +333,18 @@ export interface DiscoverCard extends MemberCard {
   score: number;
 }
 
+export interface HiddenPrefs { seeking?: boolean; ages?: boolean }
+
 export interface MemberProfile extends MemberCard {
   about: string;
   gender: Gender;
-  seeking: Gender[];
-  ageMin: number;
-  ageMax: number;
+  /** Left out when the member keeps who they're looking for private. */
+  seeking?: Gender[];
+  /** Left out when the member keeps their age range private. */
+  ageMin?: number;
+  ageMax?: number;
+  /** Set only on your own preview ("view as others see me"). */
+  preview?: boolean;
   lastActiveAt: string;
   details: { key: string; label: string; value: string }[];
   /** Red notices for viewers, e.g. a member who marked "Other" as their status. */

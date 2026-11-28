@@ -107,6 +107,7 @@ export function createHttpMemberApi(baseUrl: string, siteKey: string, platform: 
     decideAccess: (viewerId, action) => req('POST', `/v1/me/private-access/${viewerId}`, { action }),
     search: (filters) => req('GET', '/v1/members' + qs(filters as Record<string, unknown>)),
     profile: (id) => req('GET', '/v1/members/' + id),
+    previewProfile: () => req('GET', '/v1/me/preview'),
     like: (id, on) => req(on ? 'POST' : 'DELETE', `/v1/members/${id}/like`),
     pass: (id) => req('POST', `/v1/members/${id}/pass`, {}),
     discover: () => req('GET', '/v1/discover'),

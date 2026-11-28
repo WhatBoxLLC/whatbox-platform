@@ -19,7 +19,7 @@ export default function ProfileScreen() {
   const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try { const r = await api.profile(id); setP(r); setBig(r.mainPhoto); } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not load.'); }
+    try { const r = id === 'me' ? await api.previewProfile() : await api.profile(id); setP(r); setBig(r.mainPhoto); } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not load.'); }
   }, [api, id]);
   useEffect(() => { load(); }, [load]);
 
@@ -37,6 +37,11 @@ export default function ProfileScreen() {
     denied: `${p.displayName} keeps these private.`,
     revoked: `${p.displayName} keeps these private.`,
   }[p.privateAccess];
+  const preview = !!p.preview;
+  const lookingFor = [
+    p.seeking ? p.seeking.map((s) => GENDERS.find((g) => g.value === s)?.plural ?? s).join(', ') : '',
+    p.ageMin !== undefined ? `${p.ageMin} to ${p.ageMax}` : '',
+  ].filter(Boolean).join(', ');
   const all = [p.mainPhoto, ...p.publicPhotos].filter(Boolean) as PhotoView[];
 
   return (
@@ -44,8 +49,13 @@ export default function ProfileScreen() {
       <View style={{ maxWidth: 1200, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingTop: 16 }}>
         <Pressable onPress={() => (router.canGoBack() ? router.back() : router.replace('/browse'))} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, alignSelf: 'flex-start' }}>
           <Icon name="back" size={18} color={t.accent} stroke={2.2} />
-          <Txt bold size={15} color={t.accent}>Back to results</Txt>
+          <Txt bold size={15} color={t.accent}>{preview ? 'Back' : 'Back to results'}</Txt>
         </Pressable>
+        {preview ? (
+          <Notice tone="info" icon="eye" title="This is how other members see your profile">
+            Only approved photos show, and your private photos stay locked until you share them. Preferences you keep private aren't shown, but they still decide who we suggest to you.
+          </Notice>
+        ) : null}
 
         <View style={{ flexDirection: wide ? 'row' : 'column', gap: 32, marginTop: 8, alignItems: 'flex-start' }}>
           <View style={{ flex: 1, width: '100%', gap: 14 }}>
@@ -81,8 +91,8 @@ export default function ProfileScreen() {
                     </View>
                     <Txt sub size={14}>{privNote}</Txt>
                   </View>
-                  {p.privateAccess === 'none' && p.canRequestPrivate ? <Btn label="Request access" size="sm" onPress={() => act(() => api.requestAccess(p.id))} /> : null}
-                  {p.privateAccess === 'none' && !p.canRequestPrivate ? <Btn label="Upgrade to request" kind="secondary" size="sm" icon="lock" onPress={() => router.push('/me?tab=settings')} /> : null}
+                  {!preview && p.privateAccess === 'none' && p.canRequestPrivate ? <Btn label="Request access" size="sm" onPress={() => act(() => api.requestAccess(p.id))} /> : null}
+                  {!preview && p.privateAccess === 'none' && !p.canRequestPrivate ? <Btn label="Upgrade to request" kind="secondary" size="sm" icon="lock" onPress={() => router.push('/me?tab=settings')} /> : null}
                   {p.privateAccess === 'requested' ? <Btn label="Requested" kind="soft" size="sm" disabled /> : null}
                 </View>
                 <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -111,6 +121,9 @@ export default function ProfileScreen() {
               <Txt sub style={{ marginTop: 6 }}>{[p.city, p.region].filter(Boolean).join(', ')}{p.miles !== null ? ` · ${awayLabel(p.miles, me!.member.unitsResolved, true)}` : ''} · {p.online ? 'Online now' : `Active ${relTime(p.lastActiveAt)}`}</Txt>
             </View>
 
+            {preview ? (
+              <Btn label="Edit my profile" kind="secondary" onPress={() => router.push('/me?tab=profile')} style={{ alignSelf: 'flex-start' }} />
+            ) : <>
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
               <Btn flex label="Message" icon="chat" disabled={!p.canMessage} onPress={() => router.push(`/messages/${p.id}`)} style={{ minWidth: 150 }} />
               <Btn flex label={p.likedByMe ? 'Liked' : 'Like'} icon="heart" kind={p.likedByMe ? 'soft' : 'danger'} onPress={() => act(async () => {
@@ -127,6 +140,7 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
             {p.messageLockReason ? <Notice tone="warn" icon="lock">{p.messageLockReason}</Notice> : null}
+            </>}
             {note ? <Notice tone="success" icon="heart">{note}</Notice> : null}
             <ErrorText error={error} />
 
@@ -154,11 +168,11 @@ export default function ProfileScreen() {
               <Txt>{p.about || `${p.displayName} hasn't written anything yet.`}</Txt>
             </Card>
 
-            {p.details.length ? (
+            {p.details.length || lookingFor ? (
               <Card>
                 <H size={18} level={2} style={{ marginBottom: 14 }}>Details</H>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: 14 }}>
-                  <Detail label="Looking for" value={`${p.seeking.map((s) => GENDERS.find((g) => g.value === s)?.plural ?? s).join(', ')}, ${p.ageMin} to ${p.ageMax}`} />
+                  {lookingFor ? <Detail label="Looking for" value={lookingFor} /> : null}
                   {p.details.map((d) => <Detail key={d.key} label={d.label} value={d.value} />)}
                 </View>
               </Card>

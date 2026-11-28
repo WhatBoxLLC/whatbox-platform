@@ -45,6 +45,8 @@ export interface MemberApi {
 
   search(filters: SearchFilters): Promise<SearchResult>;
   profile(id: string): Promise<MemberProfile>;
+  /** My own profile as other members see it. */
+  previewProfile(): Promise<MemberProfile>;
   like(id: string, on: boolean): Promise<{ liked: boolean; mutual: boolean; vip: boolean }>;
   pass(id: string): Promise<{ ok: boolean }>;
   discover(): Promise<DiscoverCard[]>;
@@ -133,6 +135,7 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     decideAccess: (id, a) => wrap(async () => platform.decideAccess(await ctx(), id, a)),
     search: (f) => wrap(async () => platform.search(await ctx(), f)),
     profile: (id) => wrap(async () => platform.profile(await ctx(), id)),
+    previewProfile: () => wrap(async () => platform.previewProfile(await ctx())),
     like: (id, on) => wrap(async () => platform.like(await ctx(), id, on)),
     pass: (id) => wrap(async () => platform.pass(await ctx(), id)),
     discover: () => wrap(async () => platform.discover(await ctx())),

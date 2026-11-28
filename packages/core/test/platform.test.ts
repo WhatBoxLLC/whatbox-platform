@@ -557,3 +557,29 @@ test('photo decisions notify the owner, and push follows their choices', async (
   assert.equal(wantsPush(undefined, { type: 'like', fromId: 'x', vip: false }), false, 'likes are off by default');
   assert.equal(wantsPush({ photos: false }, { type: 'photo', photoId: 'p', status: 'approved' }), false);
 });
+
+test('preview my profile as others see it; private preferences hidden but still used', async () => {
+  const mp = await createMemoryPlatform();
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await a.startVerification('email', 'private.prefs@example.com');
+  a.setToken((await a.verify(s.challengeId, s.devCode!)).token);
+  await a.updateMe({ displayName: 'Quinn', birthYear: 1985, gender: 'woman', seeking: ['man'], ageMin: 35, ageMax: 50, postal: '80202', fields: { hsv_status: ['HSV-1'] } });
+  let pv = await a.previewProfile();
+  assert.equal(pv.preview, true);
+  assert.deepEqual(pv.seeking, ['man']);
+  assert.equal(pv.canMessage, false);
+  await a.updateMe({ hiddenPrefs: { seeking: true, ages: true } });
+  pv = await a.previewProfile();
+  assert.equal(pv.seeking, undefined);
+  assert.equal(pv.ageMin, undefined);
+  const b = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const t = await b.startVerification('email', DEMO_MEMBER_EMAIL);
+  b.setToken((await b.verify(t.challengeId, t.devCode!)).token);
+  const quinn = (await b.search({ seeking: ['woman'], ageMin: 18, ageMax: 99, withinMiles: null, withPhoto: false })).people.find((p) => p.displayName === 'Quinn');
+  assert.ok(quinn);
+  const seen = await b.profile(quinn!.id);
+  assert.equal(seen.seeking, undefined, 'others do not see hidden preferences');
+  assert.equal(seen.ageMax, undefined);
+  const deck = await a.discover();
+  assert.ok(deck.length > 0 && deck.every((c) => c.age >= 35 && c.age <= 50 || !!c.stretch), 'hidden preferences still steer suggestions');
+});

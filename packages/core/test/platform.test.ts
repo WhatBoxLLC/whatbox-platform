@@ -583,3 +583,50 @@ test('preview my profile as others see it; private preferences hidden but still 
   const deck = await a.discover();
   assert.ok(deck.length > 0 && deck.every((c) => c.age >= 35 && c.age <= 50 || !!c.stretch), 'hidden preferences still steer suggestions');
 });
+
+test('events: admins create and cancel, members RSVP, profiles show events only when opted in', async () => {
+  const mp = await createMemoryPlatform();
+  const admin = createLocalAdminApi(mp.platform);
+  const st = await admin.start(DEMO_OWNER_EMAIL);
+  admin.setToken((await admin.verify(st.challengeId, st.devCode!)).token);
+  const soon = new Date(Date.now() + 7 * 86400_000).toISOString();
+  await assert.rejects(admin.saveEvent('site_afterh', { title: 'Meetup', startsAt: soon }), /city/);
+  await assert.rejects(admin.saveEvent('site_afterh', { title: 'Meetup', startsAt: soon, city: 'Austin', link: 'http://x.com' }), /https/);
+  let rows = await admin.saveEvent('site_afterh', { title: 'Texas meetup', startsAt: soon, city: 'Austin', region: 'TX', country: 'us', address: '1 Main St', status: 'draft' });
+  const ev = rows.find((e) => e.title === 'Texas meetup')!;
+  assert.equal(ev.country, 'US');
+  assert.equal(ev.price, 'Free');
+
+  const a = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const s = await a.startVerification('email', DEMO_MEMBER_EMAIL);
+  a.setToken((await a.verify(s.challengeId, s.devCode!)).token);
+  assert.ok(!(await a.events()).some((e) => e.id === ev.id), 'drafts are hidden');
+  await admin.saveEvent('site_afterh', { ...ev, status: 'published' });
+  const up = await a.events();
+  assert.ok(up.some((e) => e.id === ev.id));
+  assert.equal(up[0].featured, true, 'featured first');
+  assert.equal(up.find((e) => e.id === ev.id)!.address, undefined, 'address hidden until going');
+  let v = await a.rsvp(ev.id, 'going');
+  assert.equal(v.address, '1 Main St');
+  assert.equal(v.myRsvp, 'going');
+  assert.equal(v.goingCount, 1);
+
+  const b = createLocalMemberApi(mp.platform, 'afterh', 'web');
+  const t = await b.startVerification('email', 'events.viewer@example.com');
+  b.setToken((await b.verify(t.challengeId, t.devCode!)).token);
+  await b.updateMe({ displayName: 'Viewer', birthYear: 1985, gender: 'woman', seeking: ['man'], postal: '80202', fields: { hsv_status: ['HSV-1'] } });
+  const me = await a.me();
+  v = await b.event(ev.id);
+  assert.equal(v.goingCount, 1);
+  assert.equal(v.attendees.length, 0, 'not listed until they opt in');
+  assert.equal((await b.profile(me.member.id)).events, undefined);
+  await a.updateMe({ showEvents: true });
+  assert.equal((await b.event(ev.id)).attendees[0].id, me.member.id);
+  assert.equal((await b.profile(me.member.id)).events?.[0].title, 'Texas meetup');
+
+  await assert.rejects(admin.deleteEvent('site_afterh', ev.id), /Cancel it instead/);
+  await admin.saveEvent('site_afterh', { ...ev, status: 'cancelled' });
+  await assert.rejects(b.rsvp(ev.id, 'going'), /cancelled/);
+  assert.equal((await b.event(ev.id)).status, 'cancelled');
+  assert.ok((await a.events('past')).every((e) => e.past));
+});

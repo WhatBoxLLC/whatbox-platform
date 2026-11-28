@@ -178,6 +178,23 @@ export default function ProfileScreen() {
               </Card>
             ) : null}
 
+            {p.events?.length ? (
+              <Card>
+                <H size={18} level={2} style={{ marginBottom: 12 }}>Events</H>
+                <View style={{ gap: 10 }}>
+                  {p.events.map((ev) => (
+                    <Pressable key={ev.id} accessibilityRole="link" onPress={() => router.push(`/events/${ev.id}`)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Icon name="calendar" size={18} color={t.accent} />
+                      <View style={{ flex: 1 }}>
+                        <Txt bold>{ev.title}</Txt>
+                        <Txt sub size={13}>{ev.past ? 'Went' : 'Going'} · {new Date(ev.startsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} · {ev.online ? 'Online' : ev.city}</Txt>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              </Card>
+            ) : null}
+
             {p.interests.length ? (
               <Card>
                 <H size={18} level={2} style={{ marginBottom: 12 }}>Interests</H>

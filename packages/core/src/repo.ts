@@ -1,7 +1,7 @@
 // Storage interfaces. The API implements these on PostgreSQL (one database per site plus
 // a control database); the clickable preview implements them in memory.
 import type {
-  AdminUser, AuditEntry, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
+  AdminUser, AuditEntry, EventRsvp, SiteEvent, Block, Favorite, MemberEvent, Pass, ContactOptIn, ContentPage, Gender, Like, Member, Message, ModerationItem,
   Photo, PrivateAccess, PushToken, Report, Subscription, SubscriptionStatus, ReviewStatus, Site, UsageKind, VerificationChallenge, View,
 } from './types';
 
@@ -103,6 +103,15 @@ export interface SiteRepo {
   saveModeration(item: ModerationItem): Promise<void>;
   getModeration(id: string): Promise<ModerationItem | null>;
   listModeration(status: ReviewStatus | 'all'): Promise<ModerationItem[]>;
+
+  // site events
+  listEvents(): Promise<SiteEvent[]>;
+  getEvent(id: string): Promise<SiteEvent | null>;
+  saveEvent(e: SiteEvent): Promise<void>;
+  deleteEvent(id: string): Promise<void>; // and its RSVPs
+  setRsvp(r: EventRsvp | { eventId: string; memberId: string; status: null }): Promise<void>;
+  listRsvpsFor(eventIds: string[]): Promise<EventRsvp[]>;
+  listRsvpsOf(memberId: string): Promise<EventRsvp[]>;
 
   // public content
   listPages(): Promise<ContentPage[]>;

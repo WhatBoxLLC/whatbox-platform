@@ -4,7 +4,7 @@ import { DEFAULT_MEMBERSHIP } from './rules';
 import { DEFAULT_LICENSING } from './types';
 import type {
   AdminUser, ContentPage, Gender, Member, Message, ModerationItem, Photo, PrivateAccess, ProfileFieldDef, Site,
-  SiteSettings, Tier, View, Like,
+  SiteSettings, Tier, View, Like, SiteEvent, EventRsvp,
 } from './types';
 
 export const DEMO_MEMBER_EMAIL = 'alex@example.com';
@@ -171,6 +171,7 @@ function some<T>(r: () => number, list: T[], n: number): T[] {
 export interface SiteSeed {
   members: Member[]; photos: Photo[]; likes: Like[]; views: View[]; messages: Message[];
   access: PrivateAccess[]; moderation: ModerationItem[]; pages: ContentPage[];
+  events: SiteEvent[]; rsvps: EventRsvp[];
 }
 
 export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { emailHash: string; emailEnc: string } } = {}): SiteSeed {
@@ -308,7 +309,38 @@ export function seedSite(site: Site, now: Date, opts: { demoMemberHash?: { email
   // Priya is VIP in the demo: with the paywall on, her messages stay readable for free members.
   if (big) byName('Priya').tier = 'vip';
   for (const msg of messages) msg.senderTier = members.find((m) => m.id === msg.fromId)?.tier ?? 'free';
-  return { members, photos, likes, views, messages, access, moderation, pages: seedPages(site, now) };
+  const { events, rsvps } = seedEvents(site, now, members);
+  return { members, photos, likes, views, messages, access, moderation, pages: seedPages(site, now), events, rsvps };
+}
+
+// Sample events (clearly placeholders) so the Events page has something to show in the demo.
+function seedEvents(site: Site, now: Date, members: Member[]): { events: SiteEvent[]; rsvps: EventRsvp[] } {
+  const day = (d: number, h = 18) => { const x = new Date(now); x.setUTCDate(x.getUTCDate() + d); x.setUTCHours(h, 0, 0, 0); return x.toISOString(); };
+  const at = now.toISOString();
+  const base = { online: false, featured: false, status: 'published' as const, createdAt: at, updatedAt: at, country: 'US', timezone: 'America/Denver' };
+  const samples: Record<string, SiteEvent[]> = {
+    afterh: [
+      { ...base, id: 'ev_seed_regional', title: 'Rocky Mountain regional gathering (sample)', summary: 'A relaxed weekend meetup for members in the region.', details: 'Sample event for the demo. Friday evening welcome, Saturday brunch and an afternoon hike, Saturday dinner.\n\nThe exact address is shared with members who say they are going.', startsAt: day(20, 23), endsAt: day(22, 18), venue: 'Downtown hotel (sample)', address: '100 Sample St, Denver, CO', city: 'Denver', region: 'CO', price: '$40 weekend pass', featured: true },
+      { ...base, id: 'ev_seed_online', title: 'Monthly online chat (sample)', summary: 'An hour-long video chat to meet other members.', details: 'Sample event. Cameras optional.', startsAt: day(6, 2), online: true, city: '', region: '', price: 'Free' },
+      { ...base, id: 'ev_seed_past', title: 'Fall picnic (sample)', summary: 'Picnic in the park.', details: 'Sample past event.', startsAt: day(-30, 18), city: 'Boulder', region: 'CO', price: 'Free' },
+    ],
+    datealittle: [
+      { ...base, id: 'ev_seed_convention', title: 'National convention meetup (sample)', summary: 'Meet other members at this year\'s national convention.', details: 'Sample event. A members-only social on the first evening of the convention.', startsAt: day(45, 23), endsAt: day(49, 18), city: 'Denver', region: 'CO', price: 'Free for members', featured: true },
+    ],
+    hfriends: [
+      { ...base, id: 'ev_seed_walk', title: 'Saturday walk and coffee (sample)', summary: 'An easy walk followed by coffee.', details: 'Sample event.', startsAt: day(9, 16), city: 'Denver', region: 'CO', price: 'Free' },
+    ],
+  };
+  const events = samples[site.slug] ?? [];
+  const rsvps: EventRsvp[] = [];
+  const active = members.filter((m) => m.profileComplete);
+  events.forEach((e, ei) => {
+    active.filter((_, i) => (i + ei) % 3 === 0).slice(0, 9).forEach((m, i) => {
+      rsvps.push({ eventId: e.id, memberId: m.id, status: i % 4 === 3 ? 'interested' : 'going', at });
+      if (i % 2 === 0) m.showEvents = true;
+    });
+  });
+  return { events, rsvps };
 }
 
 function seedPages(site: Site, now: Date): ContentPage[] {

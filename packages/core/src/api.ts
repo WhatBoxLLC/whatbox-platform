@@ -6,7 +6,7 @@ import type { AccessRow, Platform, ProfilePatch } from './services';
 import type {
   ActivityKind, ActivityList, AdminMemberRow, ClientPlatform, MemberEvent, DiscoverCard, ContentPage, ConversationSummary, ConversationView, MemberProfile,
   MemberStatus, ModerationView, MyProfile, PhotoKind, PhotoRating, ProfileFieldDef, PublicSite, SearchFilters,
-  SearchResult, Site, GeoCountry, GeoPlace, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview,
+  SearchResult, Site, EventView, RsvpStatus, SiteEvent, GeoCountry, GeoPlace, SiteMode, SiteStats, Tier, AdminUser, AuditEntry, NewSiteInput, PlatformOverview,
 } from './types';
 
 export class ApiError extends Error {
@@ -47,6 +47,9 @@ export interface MemberApi {
   profile(id: string): Promise<MemberProfile>;
   /** My own profile as other members see it. */
   previewProfile(): Promise<MemberProfile>;
+  events(which?: 'upcoming' | 'past'): Promise<EventView[]>;
+  event(id: string): Promise<EventView>;
+  rsvp(id: string, status: RsvpStatus | null): Promise<EventView>;
   like(id: string, on: boolean): Promise<{ liked: boolean; mutual: boolean; vip: boolean }>;
   pass(id: string): Promise<{ ok: boolean }>;
   discover(): Promise<DiscoverCard[]>;
@@ -85,6 +88,9 @@ export interface AdminApi {
   pages(siteId: string): Promise<ContentPage[]>;
   savePage(siteId: string, page: ContentPage): Promise<ContentPage[]>;
   deletePage(siteId: string, slug: string): Promise<ContentPage[]>;
+  events(siteId: string): Promise<AdminEventRow[]>;
+  saveEvent(siteId: string, e: Partial<SiteEvent>): Promise<AdminEventRow[]>;
+  deleteEvent(siteId: string, id: string): Promise<AdminEventRow[]>;
 
   audit(siteId?: string): Promise<AuditEntry[]>;
 
@@ -95,6 +101,7 @@ export interface AdminApi {
   saveOwner(input: { id?: string; email: string; name: string; siteIds: string[] }): Promise<AdminUser>;
   deleteOwner(ownerId: string): Promise<{ ok: boolean }>;
 }
+export type AdminEventRow = SiteEvent & { goingCount: number; interestedCount: number };
 export type PlatformSitePatch = Parameters<Platform['platformUpdateSite']>[2];
 
 async function wrap<T>(fn: () => Promise<T>): Promise<T> {
@@ -136,6 +143,9 @@ export function createLocalMemberApi(platform: Platform, siteKey: string, client
     search: (f) => wrap(async () => platform.search(await ctx(), f)),
     profile: (id) => wrap(async () => platform.profile(await ctx(), id)),
     previewProfile: () => wrap(async () => platform.previewProfile(await ctx())),
+    events: (which) => wrap(async () => platform.events(await ctx(), which)),
+    event: (id) => wrap(async () => platform.event(await ctx(), id)),
+    rsvp: (id, status) => wrap(async () => platform.rsvp(await ctx(), id, status)),
     like: (id, on) => wrap(async () => platform.like(await ctx(), id, on)),
     pass: (id) => wrap(async () => platform.pass(await ctx(), id)),
     discover: () => wrap(async () => platform.discover(await ctx())),
@@ -193,5 +203,8 @@ export function createLocalAdminApi(platform: Platform): AdminApi {
     pages: (s) => wrap(async () => platform.adminPages(await admin(), s)),
     savePage: (s, p) => wrap(async () => platform.adminSavePage(await admin(), s, p)),
     deletePage: (s, slug) => wrap(async () => platform.adminDeletePage(await admin(), s, slug)),
+    events: (s) => wrap(async () => platform.adminEvents(await admin(), s)),
+    saveEvent: (s, e) => wrap(async () => platform.adminSaveEvent(await admin(), s, e)),
+    deleteEvent: (s, id) => wrap(async () => platform.adminDeleteEvent(await admin(), s, id)),
   };
 }

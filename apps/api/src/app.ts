@@ -6,7 +6,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { normalizeImage } from './photos';
 import { safeReturnUrl } from './payments';
-import { type ActivityKind, type ClientPlatform, type ContentPage, type PhotoKind, type PhotoRating, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type Tier } from '@whatbox/core';
+import { type ActivityKind, type ClientPlatform, type ContentPage, type PhotoKind, type PhotoRating, type Platform, type ProfileFieldDef, RuleError, type SearchFilters, type SiteEvent, type Tier } from '@whatbox/core';
 import type { Request, Response } from 'express';
 
 export const PLATFORM = 'PLATFORM';
@@ -64,6 +64,17 @@ export class PublicController extends SiteScoped {
     const t = bearer(r.headers.authorization);
     if (t) await this.p.signOut(await this.site(r), t);
     return { ok: true };
+  }
+}
+
+// Site events, members only.
+@Controller('v1/events')
+export class EventsController extends SiteScoped {
+  constructor(@Inject(PLATFORM) p: Platform) { super(p); }
+  @Get() async list(@Req() r: Request, @Query('when') when?: string) { return this.p.events(await this.ctx(r), when === 'past' ? 'past' : 'upcoming'); }
+  @Get(':id') async one(@Req() r: Request, @Param('id') id: string) { return this.p.event(await this.ctx(r), id); }
+  @Put(':id/rsvp') async rsvp(@Req() r: Request, @Param('id') id: string, @Body() b: { status: 'going' | 'interested' | null }) {
+    return this.p.rsvp(await this.ctx(r), id, b?.status ?? null);
   }
 }
 
@@ -217,6 +228,13 @@ export class AdminController {
   @Put('sites/:site/pages/:slug') async savePage(@Headers('authorization') a: string, @Param('site') s: string, @Body() b: ContentPage) {
     return this.p.adminSavePage(await this.admin(a), s, b);
   }
+  @Get('sites/:site/events') async events(@Headers('authorization') a: string, @Param('site') s: string) { return this.p.adminEvents(await this.admin(a), s); }
+  @Put('sites/:site/events') async saveEvent(@Headers('authorization') a: string, @Param('site') s: string, @Body() b: Partial<SiteEvent>) {
+    return this.p.adminSaveEvent(await this.admin(a), s, b);
+  }
+  @Delete('sites/:site/events/:id') async delEvent(@Headers('authorization') a: string, @Param('site') s: string, @Param('id') id: string) {
+    return this.p.adminDeleteEvent(await this.admin(a), s, id);
+  }
   @Delete('sites/:site/pages/:slug') async delPage(@Headers('authorization') a: string, @Param('site') s: string, @Param('slug') slug: string) {
     return this.p.adminDeletePage(await this.admin(a), s, slug);
   }
@@ -225,7 +243,7 @@ export class AdminController {
 export function buildModule(platform: Platform) {
   @Global()
   @Module({
-    controllers: [PublicController, GeoController, MeController, MembersController, SocialController, WebhookController, AdminController],
+    controllers: [PublicController, EventsController, GeoController, MeController, MembersController, SocialController, WebhookController, AdminController],
     providers: [{ provide: PLATFORM, useValue: platform }],
   })
   class AppModule {}

@@ -2,7 +2,7 @@
 // snapshotted to localStorage. Each site gets its own MemorySiteRepo instance, mirroring
 // the one-database-per-site layout of production.
 import type { AdminChallenge, AdminSession, ControlRepo, MemberQuery, MemberSession, SiteRepo } from './repo';
-import type { UsageKind, AuditEntry,
+import type { UsageKind, AuditEntry, EventRsvp, SiteEvent,
   AdminUser, Block, Favorite, Pass, ContactOptIn, ContentPage, Like, Member, Message, ModerationItem, Photo,
   PrivateAccess, PushToken, Report, Subscription, ReviewStatus, Site, VerificationChallenge, View,
 } from './types';
@@ -88,6 +88,7 @@ export interface SiteSnapshot {
   blocks: Block[]; passes: Pass[]; favorites: Favorite[]; messages: Message[]; optins: ContactOptIn[]; reports: Report[];
   moderation: ModerationItem[]; pages: ContentPage[]; challenges: VerificationChallenge[];
   sessions: MemberSession[]; push?: PushToken[]; subscriptions?: Subscription[];
+  events?: SiteEvent[]; rsvps?: EventRsvp[];
 }
 
 export class MemorySiteRepo implements SiteRepo {
@@ -98,6 +99,8 @@ export class MemorySiteRepo implements SiteRepo {
   constructor(snap?: Partial<SiteSnapshot>) {
     if (snap) Object.assign(this.d, clone(snap));
     this.d.passes ??= [];
+    this.d.events ??= [];
+    this.d.rsvps ??= [];
     this.d.favorites ??= [];
   }
   snapshot(): SiteSnapshot { return clone(this.d); }
@@ -126,6 +129,7 @@ export class MemorySiteRepo implements SiteRepo {
     d.likes = d.likes.filter((x) => !pair(x.fromId, x.toId));
     d.passes = d.passes.filter((x) => !pair(x.fromId, x.toId));
     d.favorites = d.favorites.filter((x) => !pair(x.fromId, x.toId));
+    d.rsvps = (d.rsvps ?? []).filter((x) => x.memberId !== id);
     d.views = d.views.filter((x) => !pair(x.viewerId, x.viewedId));
     d.blocks = d.blocks.filter((x) => !pair(x.blockerId, x.blockedId));
     d.messages = d.messages.filter((x) => !pair(x.fromId, x.toId));
@@ -252,6 +256,17 @@ export class MemorySiteRepo implements SiteRepo {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     );
   }
+
+  async listEvents() { return clone(this.d.events!); }
+  async getEvent(id: string) { return clone(this.d.events!.find((e) => e.id === id) ?? null); }
+  async saveEvent(e: SiteEvent) { this.upsert(this.d.events!, e, (x) => x.id === e.id); }
+  async deleteEvent(id: string) { this.d.events = this.d.events!.filter((e) => e.id !== id); this.d.rsvps = this.d.rsvps!.filter((r) => r.eventId !== id); }
+  async setRsvp(r: EventRsvp | { eventId: string; memberId: string; status: null }) {
+    this.d.rsvps = this.d.rsvps!.filter((x) => !(x.eventId === r.eventId && x.memberId === r.memberId));
+    if (r.status) this.d.rsvps.push(clone(r as EventRsvp));
+  }
+  async listRsvpsFor(ids: string[]) { return clone(this.d.rsvps!.filter((r) => ids.includes(r.eventId))); }
+  async listRsvpsOf(memberId: string) { return clone(this.d.rsvps!.filter((r) => r.memberId === memberId)); }
 
   async listPages() { return clone(this.d.pages); }
   async getPage(slug: string) { return clone(this.d.pages.find((p) => p.slug === slug) ?? null); }

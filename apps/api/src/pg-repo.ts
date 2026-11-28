@@ -1,7 +1,7 @@
 // PostgreSQL implementations of the core repositories.
 // PgControlRepo talks to the shared control database; each PgSiteRepo talks to one site's own database.
 import type {
-  AdminChallenge, AdminSession, AdminUser, Block, ContactOptIn, ContentPage, ControlRepo, Favorite, Like, Pass, Member, MemberQuery, MemberSession,
+  AdminChallenge, AdminSession, AdminUser, Block, EventRsvp, SiteEvent, ContactOptIn, ContentPage, ControlRepo, Favorite, Like, Pass, Member, MemberQuery, MemberSession,
   Message, ModerationItem, Photo, PrivateAccess, PushToken, Report, ReviewStatus, Site, SiteRepo, Subscription, UsageKind, AuditEntry, VerificationChallenge, View,
 } from '@whatbox/core';
 import type { Pool } from 'pg';
@@ -325,6 +325,28 @@ export class PgSiteRepo implements SiteRepo {
       ? await this.db.query('SELECT doc FROM moderation ORDER BY created_at DESC LIMIT 200')
       : await this.db.query('SELECT doc FROM moderation WHERE status=$1 ORDER BY created_at DESC LIMIT 200', [status]);
     return docs<ModerationItem>(r.rows);
+  }
+
+  // ---- events
+  async listEvents() { return docs<SiteEvent>((await this.db.query('SELECT doc FROM events ORDER BY starts_at')).rows); }
+  async getEvent(id: string) { return (await this.db.query('SELECT doc FROM events WHERE id=$1', [id])).rows[0]?.doc ?? null; }
+  async saveEvent(e: SiteEvent) {
+    await this.db.query('INSERT INTO events VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET starts_at=$2, doc=$3', [e.id, e.startsAt, e]);
+  }
+  async deleteEvent(id: string) { await this.db.query('DELETE FROM events WHERE id=$1', [id]); } // RSVPs cascade
+  async setRsvp(r: EventRsvp | { eventId: string; memberId: string; status: null }) {
+    if (!r.status) { await this.db.query('DELETE FROM event_rsvps WHERE event_id=$1 AND member_id=$2', [r.eventId, r.memberId]); return; }
+    await this.db.query(
+      'INSERT INTO event_rsvps VALUES ($1,$2,$3,$4) ON CONFLICT (event_id, member_id) DO UPDATE SET status=$3, at=$4',
+      [r.eventId, r.memberId, r.status, (r as EventRsvp).at]);
+  }
+  private rsvp(x: any): EventRsvp { return { eventId: x.event_id, memberId: x.member_id, status: x.status, at: new Date(x.at).toISOString() }; }
+  async listRsvpsFor(ids: string[]) {
+    if (!ids.length) return [];
+    return (await this.db.query('SELECT * FROM event_rsvps WHERE event_id = ANY($1)', [ids])).rows.map((x) => this.rsvp(x));
+  }
+  async listRsvpsOf(memberId: string) {
+    return (await this.db.query('SELECT * FROM event_rsvps WHERE member_id=$1', [memberId])).rows.map((x) => this.rsvp(x));
   }
 
   // ---- pages

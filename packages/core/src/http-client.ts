@@ -108,6 +108,9 @@ export function createHttpMemberApi(baseUrl: string, siteKey: string, platform: 
     search: (filters) => req('GET', '/v1/members' + qs(filters as Record<string, unknown>)),
     profile: (id) => req('GET', '/v1/members/' + id),
     previewProfile: () => req('GET', '/v1/me/preview'),
+    events: (which) => req('GET', '/v1/events' + (which === 'past' ? '?when=past' : '')),
+    event: (id) => req('GET', '/v1/events/' + encodeURIComponent(id)),
+    rsvp: (id, status) => req('PUT', '/v1/events/' + encodeURIComponent(id) + '/rsvp', { status }),
     like: (id, on) => req(on ? 'POST' : 'DELETE', `/v1/members/${id}/like`),
     pass: (id) => req('POST', `/v1/members/${id}/pass`, {}),
     discover: () => req('GET', '/v1/discover'),
@@ -160,5 +163,8 @@ export function createHttpAdminApi(baseUrl: string): AdminApi {
     pages: (id) => req('GET', s(id) + '/pages'),
     savePage: (id, page) => req('PUT', s(id) + '/pages/' + page.slug, page),
     deletePage: (id, slug) => req('DELETE', s(id) + '/pages/' + slug),
+    events: (id) => req('GET', s(id) + '/events'),
+    saveEvent: (id, e) => req('PUT', s(id) + '/events', e),
+    deleteEvent: (id, ev) => req('DELETE', s(id) + '/events/' + encodeURIComponent(ev)),
   };
 }

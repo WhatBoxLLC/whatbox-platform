@@ -55,6 +55,7 @@ function ProfileTab() {
   const [miles, setMiles] = useState<number | null>(m.maxMiles === undefined ? 50 : m.maxMiles);
   const [strict, setStrict] = useState<StrictPrefs>({ ...DEFAULT_STRICT, ...m.strict });
   const [hidden, setHidden] = useState<HiddenPrefs>({ ...m.hiddenPrefs });
+  const [showEvents, setShowEvents] = useState(!!m.showEvents);
   const units = m.unitsResolved;
   const plural = (v: Gender) => GENDERS.find((g) => g.value === v)!.plural;
   const [fields, setFields] = useState<Member['fields']>(m.fields);
@@ -81,6 +82,7 @@ function ProfileTab() {
       <ChipPicker label="Distance" options={DISTANCE_STEPS.map((d) => distanceLabel(d, units))} value={distanceLabel(miles, units)}
         onChange={(l: string) => setMiles(DISTANCE_STEPS.find((d) => distanceLabel(d, units) === l)!)} />
       <Toggle label="Hard limit" value={strict.distance} onChange={(v) => setStrict({ ...strict, distance: v })} />
+      <Toggle label="Show events I'm going to on my profile" hint="Off by default. When on, other members see the site events you're going to or went to, and you're listed on those events." value={showEvents} onChange={setShowEvents} />
       <H size={18} level={2}>About you on {site.name}</H>
       <FieldsEditor fields={site.fields} value={fields} onChange={setFields} />
       {msg ? <Notice tone="success" icon="check">{msg}</Notice> : null}
@@ -89,7 +91,7 @@ function ProfileTab() {
       <Btn label="Save changes" busy={busy} onPress={async () => {
         setBusy(true); setError(null); setMsg(null);
         try {
-          setMe(await api.updateMe({ displayName: name, about, ...(loc ? { location: loc.input } : {}), seeking, ageMin: Number(ageMin) || m.ageMin, ageMax: Number(ageMax) || m.ageMax, maxMiles: miles, strict, hiddenPrefs: hidden, fields }));
+          setMe(await api.updateMe({ displayName: name, about, ...(loc ? { location: loc.input } : {}), seeking, ageMin: Number(ageMin) || m.ageMin, ageMax: Number(ageMax) || m.ageMax, maxMiles: miles, strict, hiddenPrefs: hidden, showEvents, fields }));
           setMsg('Saved.');
         } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not save.'); } finally { setBusy(false); }
       }} />

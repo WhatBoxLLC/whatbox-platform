@@ -15,7 +15,7 @@ import type {
   NewSiteInput, SiteMode, PlatformOverview, PlatformSiteRow, SiteLicensing, SiteStatus, UsageKind, AdminUser, ClientPlatform, ContentPage, ConversationSummary,
   ConversationView, Gender, GeoPlace, GeoProvider, LocationInput, Member, MemberCard, MemberProfile, MemberStatus, ModerationView, MyProfile, Photo,
   PhotoKind, PhotoRating, PhotoView, ProfileFieldDef, PublicSite, SearchFilters, SearchResult, Site,
-  SiteSettings, SiteStats, SiteTheme,
+  SiteSettings, SiteStats, SiteTheme, EventRsvp, EventView, ProfileEvent, RsvpStatus, SiteEvent,
 } from './types';
 
 export interface PlatformDeps {
@@ -59,6 +59,7 @@ export interface ProfilePatch {
   strict?: Partial<StrictPrefs>;
   notify?: Partial<NotifyPrefs>;
   hiddenPrefs?: HiddenPrefs;
+  showEvents?: boolean;
   about?: string;
   fields?: Member['fields'];
   hideExplicit?: boolean;
@@ -413,6 +414,7 @@ export class Platform {
       for (const k of ['seeking', 'age', 'distance'] as const) if (typeof patch.strict[k] === 'boolean') cur[k] = patch.strict[k]!;
       m.strict = cur;
     }
+    if (typeof patch.showEvents === 'boolean') m.showEvents = patch.showEvents;
     if (patch.hiddenPrefs) {
       const cur = { ...m.hiddenPrefs };
       for (const k of ['seeking', 'ages'] as const) if (typeof patch.hiddenPrefs[k] === 'boolean') cur[k] = patch.hiddenPrefs[k];
@@ -700,6 +702,7 @@ export class Platform {
       ...(m.hiddenPrefs?.seeking ? {} : { seeking: m.seeking }),
       ...(m.hiddenPrefs?.ages ? {} : { ageMin: m.ageMin, ageMax: m.ageMax }),
       ...(preview ? { preview: true } : {}),
+      ...(m.showEvents ? { events: await this.profileEvents(ctx, m.id) } : {}),
       details, cautions, interests,
       publicPhotos: perms.seePublicPhotos ? gallery.map((p) => this.photoView(ctx, p, { owner: false })) : [],
       publicPhotosLocked: perms.seePublicPhotos ? 0 : gallery.length,
@@ -715,6 +718,79 @@ export class Platform {
       canMessage: !lock,
       messageLockReason: lock,
     };
+  }
+
+  // ---------------- Events ----------------
+
+  private eventEnd(e: SiteEvent) { return e.endsAt ?? new Date(new Date(e.startsAt).getTime() + 4 * 3600_000).toISOString(); }
+
+  private async eventViews(ctx: MemberCtx, events: SiteEvent[]): Promise<EventView[]> {
+    const rsvps = await ctx.repo.listRsvpsFor(events.map((e) => e.id));
+    const blocked = await this.blockedIds(ctx);
+    const goingIds = [...new Set(rsvps.filter((r) => r.status === 'going' && r.memberId !== ctx.me.id && !blocked.has(r.memberId)).map((r) => r.memberId))];
+    const shown = (await ctx.repo.getMembers(goingIds)).filter((m) => m.showEvents && m.status === 'active' && m.profileComplete);
+    const cards = new Map((await this.cards(ctx, shown)).map((c) => [c.id, c]));
+    const now = this.iso();
+    return events.map((e) => {
+      const mine = rsvps.filter((r) => r.eventId === e.id);
+      const myRsvp = mine.find((r) => r.memberId === ctx.me.id)?.status ?? null;
+      const addressHidden = !!e.address && myRsvp !== 'going';
+      return {
+        ...e,
+        address: addressHidden ? undefined : e.address,
+        addressHidden,
+        past: this.eventEnd(e) < now,
+        goingCount: mine.filter((r) => r.status === 'going').length,
+        interestedCount: mine.filter((r) => r.status === 'interested').length,
+        myRsvp,
+        attendees: mine.filter((r) => r.status === 'going' && cards.has(r.memberId)).slice(0, 24)
+          .map((r) => { const c = cards.get(r.memberId)!; return { id: c.id, displayName: c.displayName, mainPhoto: c.mainPhoto }; }),
+      };
+    });
+  }
+
+  /** Upcoming events (cancelled ones stay listed so members see the change), or recent past ones. */
+  async events(ctx: MemberCtx, which: 'upcoming' | 'past' = 'upcoming'): Promise<EventView[]> {
+    this.requireComplete(ctx);
+    const now = this.iso();
+    let list = (await ctx.repo.listEvents()).filter((e) => e.status !== 'draft');
+    if (which === 'upcoming') {
+      list = list.filter((e) => this.eventEnd(e) >= now)
+        .sort((a, b) => Number(b.featured && b.status === 'published') - Number(a.featured && a.status === 'published') || a.startsAt.localeCompare(b.startsAt));
+    } else {
+      list = list.filter((e) => e.status === 'published' && this.eventEnd(e) < now).sort((a, b) => b.startsAt.localeCompare(a.startsAt)).slice(0, 30);
+    }
+    return this.eventViews(ctx, list);
+  }
+
+  async event(ctx: MemberCtx, id: string): Promise<EventView> {
+    this.requireComplete(ctx);
+    const e = await ctx.repo.getEvent(id);
+    if (!e || e.status === 'draft') throw new RuleError('not_found', 'Event not found.', 404);
+    return (await this.eventViews(ctx, [e]))[0];
+  }
+
+  async rsvp(ctx: MemberCtx, id: string, status: RsvpStatus | null): Promise<EventView> {
+    this.requireComplete(ctx);
+    const e = await ctx.repo.getEvent(id);
+    if (!e || e.status === 'draft') throw new RuleError('not_found', 'Event not found.', 404);
+    if (status !== null && status !== 'going' && status !== 'interested') throw new RuleError('bad_rsvp', 'Choose going or interested.');
+    if (status && e.status === 'cancelled') throw new RuleError('cancelled', 'This event was cancelled.');
+    if (status && this.eventEnd(e) < this.iso()) throw new RuleError('past', 'This event has already happened.');
+    await ctx.repo.setRsvp({ eventId: id, memberId: ctx.me.id, status, at: this.iso() } as EventRsvp);
+    this.changed();
+    return this.event(ctx, id);
+  }
+
+  private async profileEvents(ctx: MemberCtx, memberId: string): Promise<ProfileEvent[]> {
+    const going = (await ctx.repo.listRsvpsOf(memberId)).filter((r) => r.status === 'going');
+    if (!going.length) return [];
+    const now = this.iso();
+    const evs = (await ctx.repo.listEvents()).filter((e) => e.status === 'published' && going.some((r) => r.eventId === e.id));
+    return evs
+      .map((e) => ({ id: e.id, title: e.title, startsAt: e.startsAt, city: e.city, online: e.online, past: this.eventEnd(e) < now }))
+      .sort((a, b) => Number(a.past) - Number(b.past) || (a.past ? b.startsAt.localeCompare(a.startsAt) : a.startsAt.localeCompare(b.startsAt)))
+      .slice(0, 12);
   }
 
   // ---------------- Likes, views, blocks, reports ----------------
@@ -1615,6 +1691,70 @@ export class Platform {
     await this.audit(admin, 'field.delete', site.id, key);
     this.changed();
     return site;
+  }
+
+  async adminEvents(admin: AdminUser, siteId: string): Promise<(SiteEvent & { goingCount: number; interestedCount: number })[]> {
+    const site = await this.adminSite(admin, siteId);
+    const repo = await this.repo(site);
+    const events = (await repo.listEvents()).sort((a, b) => b.startsAt.localeCompare(a.startsAt));
+    const rsvps = await repo.listRsvpsFor(events.map((e) => e.id));
+    return events.map((e) => ({
+      ...e,
+      goingCount: rsvps.filter((r) => r.eventId === e.id && r.status === 'going').length,
+      interestedCount: rsvps.filter((r) => r.eventId === e.id && r.status === 'interested').length,
+    }));
+  }
+
+  async adminSaveEvent(admin: AdminUser, siteId: string, input: Partial<SiteEvent>) {
+    const site = await this.adminSite(admin, siteId);
+    const repo = await this.repo(site);
+    const prev = input.id ? await repo.getEvent(input.id) : null;
+    const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+    const title = str(input.title, 120);
+    if (title.length < 3) throw new RuleError('bad_title', 'Give the event a title.');
+    const starts = new Date(String(input.startsAt ?? ''));
+    if (isNaN(starts.getTime())) throw new RuleError('bad_start', 'Pick a start date and time.');
+    let endsAt: string | undefined;
+    if (input.endsAt) {
+      const end = new Date(String(input.endsAt));
+      if (isNaN(end.getTime()) || end < starts) throw new RuleError('bad_end', 'The end has to be after the start.');
+      endsAt = end.toISOString();
+    }
+    const online = !!input.online;
+    const city = str(input.city, 80);
+    if (!online && !city) throw new RuleError('no_city', 'Add the city, or mark the event as online.');
+    const link = str(input.link, 300);
+    if (link && !/^https:\/\/[^\s]+$/i.test(link)) throw new RuleError('bad_link', 'Links must start with https://');
+    let timezone = str(input.timezone, 60) || undefined;
+    if (timezone) { try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }); } catch { throw new RuleError('bad_tz', 'Unknown time zone.'); } }
+    const status = (['draft', 'published', 'cancelled'] as const).includes(input.status as any) ? input.status! : 'draft';
+    const now = this.iso();
+    const e: SiteEvent = {
+      id: prev?.id ?? randomId('ev_'),
+      title, summary: str(input.summary, 200), details: str(input.details, 5000),
+      startsAt: starts.toISOString(), endsAt, timezone, online,
+      venue: str(input.venue, 120) || undefined, address: str(input.address, 200) || undefined,
+      city, region: str(input.region, 60), country: str(input.country, 2).toUpperCase(),
+      link: link || undefined, price: str(input.price, 60) || 'Free', featured: !!input.featured, status,
+      createdAt: prev?.createdAt ?? now, updatedAt: now,
+    };
+    await repo.saveEvent(e);
+    await this.audit(admin, prev ? (prev.status !== e.status ? `event.${e.status}` : 'event.save') : 'event.create', site.id, e.id, e.title);
+    this.changed();
+    return this.adminEvents(admin, siteId);
+  }
+
+  async adminDeleteEvent(admin: AdminUser, siteId: string, id: string) {
+    const site = await this.adminSite(admin, siteId);
+    const repo = await this.repo(site);
+    const e = await repo.getEvent(id);
+    if (e && e.status !== 'draft' && (await repo.listRsvpsFor([id])).length) {
+      throw new RuleError('has_rsvps', 'Members have replied to this event. Cancel it instead so they see the change.');
+    }
+    await repo.deleteEvent(id);
+    await this.audit(admin, 'event.delete', site.id, id, e?.title);
+    this.changed();
+    return this.adminEvents(admin, siteId);
   }
 
   async adminPages(admin: AdminUser, siteId: string) {

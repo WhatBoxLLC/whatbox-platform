@@ -187,6 +187,8 @@ export interface Member {
   notify?: Partial<NotifyPrefs>;
   /** Preferences kept off their profile. They still decide who is suggested to them. */
   hiddenPrefs?: HiddenPrefs;
+  /** Opt in to list the site events they're going to (or went to) on their profile. Off by default. */
+  showEvents?: boolean;
   about: string;
   fields: Record<string, string | string[] | number | boolean>;
   status: MemberStatus;
@@ -267,6 +269,46 @@ export interface ModerationItem {
   decidedBy?: string;
 }
 
+// ---------------- Events ----------------
+// Site-run gatherings (e.g. an AfterH regional meetup, a DateALittle convention). Members-only:
+// events are never shown on the public site, so sensitive sites stay discreet.
+export type EventStatus = 'draft' | 'published' | 'cancelled';
+export interface SiteEvent {
+  id: string;
+  title: string;
+  summary: string; // one line for cards
+  details: string; // paragraphs, split on blank lines
+  startsAt: string; // ISO
+  endsAt?: string; // ISO
+  timezone?: string; // IANA zone the times are shown in, e.g. America/Chicago
+  online: boolean;
+  venue?: string; // place name
+  address?: string; // shown to signed-in members only
+  city: string;
+  region: string;
+  country: string;
+  link?: string; // tickets or more info, https only
+  price: string; // free text for now ("Free", "$25 at the door"); paid listings come later
+  featured: boolean; // pinned to the top and highlighted
+  status: EventStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+export type RsvpStatus = 'going' | 'interested';
+export interface EventRsvp { eventId: string; memberId: string; status: RsvpStatus; at: string }
+export interface EventView extends SiteEvent {
+  past: boolean;
+  goingCount: number;
+  interestedCount: number;
+  myRsvp: RsvpStatus | null;
+  /** The street address is only sent to members who said they're going. */
+  addressHidden: boolean;
+  /** Members going who chose to show events on their profile. Others are only counted. */
+  attendees: { id: string; displayName: string; mainPhoto?: PhotoView }[];
+}
+/** On a profile, when the member chose to show their events. */
+export interface ProfileEvent { id: string; title: string; startsAt: string; city: string; online: boolean; past: boolean }
+
 export interface ContentPage {
   slug: string;
   kind: 'page' | 'article';
@@ -345,6 +387,8 @@ export interface MemberProfile extends MemberCard {
   ageMax?: number;
   /** Set only on your own preview ("view as others see me"). */
   preview?: boolean;
+  /** Events they're going to or went to. Only when they chose to show them. */
+  events?: ProfileEvent[];
   lastActiveAt: string;
   details: { key: string; label: string; value: string }[];
   /** Red notices for viewers, e.g. a member who marked "Other" as their status. */

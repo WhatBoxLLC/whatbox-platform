@@ -1,7 +1,7 @@
 // Owner Admin: one login, a site switcher, and per-site moderation, members, fields, pages and settings.
 // Platform admins (WhatBox) see every site and can change a site's mode; owners see only their sites.
 import {
-  ApiError, type AdminApi, type AdminMemberRow, type AdminSiteSummary, type ContentPage, type ModerationView,
+  ApiError, type AdminApi, type AdminEventRow, type AdminMemberRow, isoToZoned, zonedToIso, type AdminSiteSummary, type ContentPage, type ModerationView,
   type ProfileFieldDef, type Site, type SiteStats, type SiteTheme, TIERS, type Tier, type TierPerms,
 } from '@whatbox/core';
 import { router } from 'expo-router';
@@ -22,12 +22,13 @@ const ADMIN_THEME: SiteTheme = {
   accentSoft: '#E3ECEA', second: '#D98A5F', alert: '#9A4A2E', headingFont: 'Bricolage Grotesque', bodyFont: 'Figtree', radius: 10,
 };
 const TOKEN_KEY = 'whatbox.admin.token';
-type Tab = 'overview' | 'moderation' | 'members' | 'fields' | 'pages' | 'settings';
+type Tab = 'overview' | 'moderation' | 'members' | 'fields' | 'events' | 'pages' | 'settings';
 const TABS: { key: Tab; label: string; icon: IconName }[] = [
   { key: 'overview', label: 'Overview', icon: 'grid' },
   { key: 'moderation', label: 'Moderation', icon: 'shield' },
   { key: 'members', label: 'Members', icon: 'users' },
   { key: 'fields', label: 'Profile fields', icon: 'sliders' },
+  { key: 'events', label: 'Events', icon: 'calendar' },
   { key: 'pages', label: 'Public pages', icon: 'file' },
   { key: 'settings', label: 'Site settings', icon: 'settings' },
 ];
@@ -196,6 +197,7 @@ function Dashboard({ api, me, reload, onOut }: { api: AdminApi; me: Awaited<Retu
               {tab === 'moderation' ? <Moderation api={api} siteId={siteId} onChange={reloadStats} /> : null}
               {tab === 'members' ? <Members api={api} siteId={siteId} /> : null}
               {tab === 'fields' ? <Fields api={api} site={site} onSite={setSite} /> : null}
+              {tab === 'events' ? <Events api={api} site={site} /> : null}
               {tab === 'pages' ? <Pages api={api} site={site} /> : null}
               {tab === 'settings' ? <Settings api={api} site={site} onSite={setSite} role={me.admin.role} /> : null}
             </>
@@ -404,6 +406,109 @@ function Fields({ api, site, onSite }: { api: AdminApi; site: Site; onSite: (s: 
         </Card>
       )}
     </View>
+  );
+}
+
+const ZONES = ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu', 'America/Toronto', 'America/Vancouver', 'Europe/London', 'Europe/Berlin', 'Australia/Sydney'];
+const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago'; } catch { return 'America/Chicago'; } };
+type EventForm = { id?: string; title: string; summary: string; details: string; startDate: string; startTime: string; endDate: string; endTime: string; timezone: string;
+  online: boolean; venue: string; address: string; city: string; region: string; country: string; link: string; price: string; featured: boolean; status: AdminEventRow['status'] };
+
+function toForm(e?: AdminEventRow): EventForm {
+  const tz = e?.timezone || localZone();
+  const s = e ? isoToZoned(e.startsAt, tz) : { date: '', time: '19:00' };
+  const en = e?.endsAt ? isoToZoned(e.endsAt, tz) : { date: '', time: '' };
+  return { id: e?.id, title: e?.title ?? '', summary: e?.summary ?? '', details: e?.details ?? '', startDate: s.date, startTime: s.time, endDate: en.date, endTime: en.time, timezone: tz,
+    online: e?.online ?? false, venue: e?.venue ?? '', address: e?.address ?? '', city: e?.city ?? '', region: e?.region ?? '', country: e?.country || 'US', link: e?.link ?? '',
+    price: e?.price ?? 'Free', featured: e?.featured ?? false, status: e?.status ?? 'draft' };
+}
+
+function Events({ api, site }: { api: AdminApi; site: Site }) {
+  const t = useTheme();
+  const [rows, setRows] = useState<AdminEventRow[] | null>(null);
+  const [f, setF] = useState<EventForm | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setRows(null); setF(null); api.events(site.id).then(setRows); }, [api, site.id]);
+  if (!rows) return <Loading />;
+  const now = new Date().toISOString();
+  const save = async (status?: AdminEventRow['status']) => {
+    if (!f) return;
+    setError(null);
+    const startsAt = zonedToIso(f.startDate, f.startTime, f.timezone);
+    if (!startsAt) { setError('Enter the start date as YYYY-MM-DD and the time as HH:MM.'); return; }
+    let endsAt: string | undefined;
+    if (f.endDate || f.endTime) {
+      endsAt = zonedToIso(f.endDate || f.startDate, f.endTime || '23:59', f.timezone) ?? undefined;
+      if (!endsAt) { setError('Enter the end as YYYY-MM-DD and HH:MM, or leave it empty.'); return; }
+    }
+    setBusy(true);
+    try {
+      setRows(await api.saveEvent(site.id, {
+        id: f.id, title: f.title, summary: f.summary, details: f.details, startsAt, endsAt, timezone: f.timezone, online: f.online,
+        venue: f.venue, address: f.address, city: f.city, region: f.region, country: f.country, link: f.link, price: f.price, featured: f.featured, status: status ?? f.status,
+      }));
+      setF(null);
+    } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not save.'); } finally { setBusy(false); }
+  };
+  const statusBadge = (e: AdminEventRow) => e.status === 'draft' ? <Badge label="Draft" tone="dark" /> : e.status === 'cancelled' ? <Badge label="Cancelled" tone="alert" />
+    : (e.endsAt ?? e.startsAt) < now ? <Badge label="Past" tone="dark" /> : <Badge label="Live" tone="online" />;
+
+  if (!f) return (
+    <View style={{ gap: 14 }}>
+      <Txt sub>Events show only to signed-in members of {site.name}, never on the public site. Members can say they're going, and can choose to show their events on their profile. Listings are free for now; paid and promoted listings can come later.</Txt>
+      <Btn label="New event" icon="plus" style={{ alignSelf: 'flex-start' }} onPress={() => { setError(null); setF(toForm()); }} />
+      {rows.length ? (
+        <Card pad={0} style={{ overflow: 'hidden' }}>
+          {rows.map((e, i) => (
+            <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderTopWidth: i ? 1 : 0, borderColor: t.line, flexWrap: 'wrap' }}>
+              <View style={{ flex: 1, minWidth: 220, gap: 2 }}>
+                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Txt bold>{e.title}</Txt>{statusBadge(e)}{e.featured ? <Badge label="Featured" /> : null}
+                </View>
+                <Txt sub size={13}>
+                  {new Date(e.startsAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: e.timezone })} · {e.online ? 'Online' : [e.city, e.region].filter(Boolean).join(', ')} · {e.goingCount} going, {e.interestedCount} interested
+                </Txt>
+              </View>
+              <Btn size="sm" kind="secondary" label="Edit" onPress={() => { setError(null); setF(toForm(e)); }} />
+            </View>
+          ))}
+        </Card>
+      ) : <Notice tone="info" icon="calendar">No events yet.</Notice>}
+    </View>
+  );
+
+  const set = (p: Partial<EventForm>) => setF({ ...f, ...p });
+  const row = (a: ReactNode, b: ReactNode) => <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}><View style={{ flex: 1, minWidth: 160 }}>{a}</View><View style={{ flex: 1, minWidth: 160 }}>{b}</View></View>;
+  return (
+    <Card style={{ gap: 14 }}>
+      <H size={20} level={2}>{f.id ? 'Edit event' : 'New event'}</H>
+      <Field label="Title" value={f.title} onChangeText={(v) => set({ title: v })} maxLength={120} />
+      <Field label="One-line summary" value={f.summary} onChangeText={(v) => set({ summary: v })} maxLength={200} />
+      {row(<Field label="Starts (date)" value={f.startDate} onChangeText={(v) => set({ startDate: v })} placeholder="2026-12-12" />, <Field label="Start time" value={f.startTime} onChangeText={(v) => set({ startTime: v })} placeholder="18:00" />)}
+      {row(<Field label="Ends (date, optional)" value={f.endDate} onChangeText={(v) => set({ endDate: v })} placeholder="Same day if empty" />, <Field label="End time (optional)" value={f.endTime} onChangeText={(v) => set({ endTime: v })} placeholder="22:00" />)}
+      <ChipPicker label="Time zone (times are shown to members in this zone)" options={[...new Set([f.timezone, ...ZONES])]} value={f.timezone} onChange={(v: string) => set({ timezone: v })} />
+      <Toggle label="Online event" value={f.online} onChange={(v) => set({ online: v })} />
+      {!f.online ? (
+        <>
+          {row(<Field label="Venue" value={f.venue} onChangeText={(v) => set({ venue: v })} placeholder="Hotel or park name" />, <Field label="Street address (shown once a member says they’re going)" value={f.address} onChangeText={(v) => set({ address: v })} />)}
+          {row(<Field label="City" value={f.city} onChangeText={(v) => set({ city: v })} />, row(<Field label="State or region" value={f.region} onChangeText={(v) => set({ region: v })} />, <Field label="Country code" value={f.country} onChangeText={(v) => set({ country: v.toUpperCase().slice(0, 2) })} placeholder="US" />))}
+        </>
+      ) : null}
+      {row(<Field label="Price" value={f.price} onChangeText={(v) => set({ price: v })} hint='e.g. "Free" or "$25 at the door"' />, <Field label="Tickets or info link (optional)" value={f.link} onChangeText={(v) => set({ link: v })} placeholder="https://" autoCapitalize="none" />)}
+      <Field label="Details" value={f.details} onChangeText={(v) => set({ details: v })} multiline style={{ minHeight: 160, textAlignVertical: 'top' }} hint="Separate paragraphs with a blank line." />
+      <Toggle label="Featured" hint="Pinned to the top of the Events page and highlighted." value={f.featured} onChange={(v) => set({ featured: v })} />
+      <ErrorText error={error} />
+      <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+        {f.status === 'published' ? <Btn label="Save" busy={busy} onPress={() => save()} /> : <Btn label="Publish" busy={busy} onPress={() => save('published')} />}
+        {f.status === 'draft' ? <Btn label="Save draft" kind="secondary" busy={busy} onPress={() => save('draft')} /> : null}
+        <Btn label="Back" kind="secondary" onPress={() => setF(null)} />
+        {f.id && f.status === 'published' ? <Btn label="Cancel event" kind="danger" busy={busy} onPress={() => save('cancelled')} /> : null}
+        {f.id && f.status !== 'published' ? <Btn label="Delete" kind="danger" busy={busy} onPress={async () => {
+          try { setRows(await api.deleteEvent(site.id, f.id!)); setF(null); } catch (e) { setError(e instanceof ApiError ? e.message : 'Could not delete.'); }
+        }} /> : null}
+      </View>
+    </Card>
   );
 }
 

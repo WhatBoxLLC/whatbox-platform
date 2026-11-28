@@ -11,7 +11,7 @@ import { storage } from './storage';
 const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
 export const DEFAULT_SITE = process.env.EXPO_PUBLIC_SITE || 'afterh';
 export const IS_PREVIEW = !API_URL;
-const SNAP_KEY = 'whatbox.preview.v4';
+const SNAP_KEY = 'whatbox.preview.v5';
 const clientPlatform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
 
 let memory: Promise<MemoryPlatform> | null = null;

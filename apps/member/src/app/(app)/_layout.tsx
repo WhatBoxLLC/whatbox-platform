@@ -10,6 +10,7 @@ const TABS: { href: Href; match: string; label: string; icon: IconName }[] = [
   { href: '/discover', match: '/discover', label: 'Discover', icon: 'star' },
   { href: '/browse', match: '/browse', label: 'Browse', icon: 'search' },
   { href: '/activity', match: '/activity', label: 'Activity', icon: 'heart' },
+  { href: '/events', match: '/events', label: 'Events', icon: 'calendar' },
   { href: '/messages', match: '/messages', label: 'Messages', icon: 'chat' },
   { href: '/me', match: '/me', label: 'Me', icon: 'user' },
 ];
@@ -44,7 +45,7 @@ export default function AppLayout() {
           <View style={{ maxWidth: 1200, width: '100%', alignSelf: 'center', paddingHorizontal: 20, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 24 }}>
             <Logo />
             <View role="navigation" style={{ flexDirection: 'row', gap: 4, flex: 1 }}>
-              {TABS.slice(0, 4).map((tab) => {
+              {TABS.filter((x) => x.label !== 'Me').map((tab) => {
                 const on = path.startsWith(tab.match);
                 return (
                   <Link key={tab.label} href={tab.href} asChild>

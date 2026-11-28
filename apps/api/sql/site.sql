@@ -122,6 +122,21 @@ CREATE TABLE IF NOT EXISTS moderation (
 );
 CREATE INDEX IF NOT EXISTS moderation_status_idx ON moderation (status, created_at DESC);
 
+-- Site-run events (members only) and who is going.
+CREATE TABLE IF NOT EXISTS events (
+  id         text PRIMARY KEY,
+  starts_at  timestamptz NOT NULL,
+  doc        jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_rsvps (
+  event_id   text NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  member_id  text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  status     text NOT NULL,
+  at         timestamptz NOT NULL,
+  PRIMARY KEY (event_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS rsvps_member_idx ON event_rsvps (member_id);
+
 CREATE TABLE IF NOT EXISTS pages (
   slug  text PRIMARY KEY,
   doc   jsonb NOT NULL

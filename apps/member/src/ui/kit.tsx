@@ -292,6 +292,8 @@ const ICONS = {
   sliders: ['M4 6h10', 'M18 6h2', 'circle:16,6,2', 'M4 12h4', 'M12 12h8', 'circle:10,12,2', 'M4 18h12', 'M20 18h0', 'circle:18,18,2'],
   logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'm16 17 5-5-5-5', 'M21 12H9'],
   refresh: ['M21 12a9 9 0 1 1-3-6.7L21 8', 'M21 3v5h-5'],
+  calendar: ['rect:3,5,18,16,2', 'M3 10h18', 'M8 3v4', 'M16 3v4'],
+  pin: ['M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z', 'circle:12,10,2.5'],
 } as const;
 export type IconName = keyof typeof ICONS;
 

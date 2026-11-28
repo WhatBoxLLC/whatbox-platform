@@ -55,10 +55,18 @@ jobs:
         run: |
           deployer=$(az ad sp show --id "${{ vars.AZURE_CLIENT_ID }}" --query id -o tsv)
           echo "deployer=$deployer" >> "$GITHUB_OUTPUT"
-          out=$(az deployment group create -g "$RG" -f infra/main.bicep --name "base-$TAG" \
-            -p env="$ENV" deployApps=false deployerObjectId="$deployer" postgresAdminPassword="$PG_PW" \
-               paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" \
-            --query properties.outputs -o json)
+          # Postgres sometimes reports ServerIsBusy (Azure maintenance or a previous change still
+          # applying). Wait and retry rather than failing the whole deploy.
+          for attempt in 1 2 3 4; do
+            if out=$(az deployment group create -g "$RG" -f infra/main.bicep --name "base-$TAG" \
+              -p env="$ENV" deployApps=false deployerObjectId="$deployer" postgresAdminPassword="$PG_PW" \
+                 paypalJson="$PAYPAL_JSON" oauthClientsJson="$OAUTH_JSON" expoAccessToken="$EXPO_TOKEN" \
+              --query properties.outputs -o json 2>base-err.txt); then break; fi
+            cat base-err.txt
+            if ! grep -q ServerIsBusy base-err.txt || [ "$attempt" = 4 ]; then exit 1; fi
+            echo "Postgres is busy; retrying in 3 minutes (attempt $attempt of 4)"
+            sleep 180
+          done
           echo "acr=$(jq -r .acrName.value <<<"$out")" >> "$GITHUB_OUTPUT"
           echo "kv=$(jq -r .keyVaultName.value <<<"$out")" >> "$GITHUB_OUTPUT"
           echo "api=$(jq -r .apiUrl.value <<<"$out")" >> "$GITHUB_OUTPUT"

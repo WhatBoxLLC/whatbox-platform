@@ -1,0 +1,70 @@
+name: Custom domains
+
+# Run by hand from the Actions tab. See infra/scripts/add-domain.sh for what each step does.
+#   records: print the DNS records for each domain (TXT now, A/CNAME on go-live day)
+#   add:     add the domains to the apps ahead of go-live, no certificate (safe any time)
+#   bind:    go-live day, after DNS points at Azure: issue certificates and turn on HTTPS
+#   status:  show every bound domain and its certificate state
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+      step:
+        description: Step
+        type: choice
+        options: [records, add, bind, status]
+        default: records
+      domains:
+        description: Domains, space-separated
+        type: string
+        default: afterh.com hfriends.com datealittle.com
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  domains:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    env:
+      ENV: ${{ inputs.environment }}
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      STEP: ${{ inputs.step }}
+      DOMAINS: ${{ inputs.domains }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ${{ inputs.step }}
+        run: |
+          set -o pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+          if [ "$STEP" = status ]; then
+            for a in "whatbox-$ENV-web" "whatbox-$ENV-app"; do
+              echo "## $a"
+              az containerapp hostname list -g "$RG" -n "$a" -o table
+            done | tee out.txt
+          else
+            for d in $DOMAINS; do
+              [[ "$d" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "skipping bad domain: $d"; continue; }
+              echo "## $d"
+              infra/scripts/add-domain.sh "$STEP" "$RG" "$ENV" "$d"
+              echo
+            done | tee out.txt
+          fi
+          { echo "### Custom domains: $STEP ($ENV)"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

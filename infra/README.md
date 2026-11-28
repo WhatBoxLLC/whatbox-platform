@@ -44,7 +44,7 @@ deploy is clean.
 
 1. Add its key: `infra/scripts/bootstrap-secrets.sh <vault> site_<slug>` and restart the API revision.
 2. In Platform Admin → Add a site. The API creates the site's database.
-3. Point DNS and bind certificates: `infra/scripts/add-domain.sh <rg> <env> <domain>` (instructions in the script).
+3. Domains: Actions → **Custom domains** (records, add, then bind on go-live day). See [go-live-domains.md](go-live-domains.md).
 
 ## Payments
 

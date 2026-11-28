@@ -32,8 +32,9 @@ export default function Browse() {
 
   const load = useCallback(async (f: SearchFilters) => {
     setRes(null);
-    setRes(await api.search(f));
-  }, [api]);
+    // Always search for who they want to meet now, so a profile change shows up straight away.
+    setRes(await api.search({ ...f, seeking: me!.member.seeking }));
+  }, [api, me]);
   useEffect(() => { load(filters); }, [filters, load]);
 
   const apply = () => {
@@ -51,6 +52,7 @@ export default function Browse() {
   };
   const filterable = site.fields.filter((f) => f.filterable && (f.type === 'select' || f.type === 'multiselect'));
   const moreCount = filterable.filter((f) => draft.fields?.[f.key]?.length).length;
+  const seekingLabel = (me!.member.seeking ?? []).map((v) => GENDERS.find((g) => g.value === v)?.plural ?? v).join(', ') || 'Everyone';
   const digits = (v: string) => v.replace(/\D/g, '').slice(0, 2);
 
   const panel = (
@@ -60,8 +62,14 @@ export default function Browse() {
         <Btn label="Reset" kind="secondary" size="sm" onPress={reset} />
       </View>
       <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 18, paddingHorizontal: 20, paddingBottom: 16 }}>
-        <ChipPicker label="Looking for" multi options={GENDERS.map((g) => g.plural)} value={(draft.seeking ?? []).map((v) => GENDERS.find((g) => g.value === v)!.plural)}
-          onChange={(ls: string[]) => { if (ls.length) setDraft({ ...draft, seeking: ls.map((l) => GENDERS.find((g) => g.plural === l)!.value) }); }} />
+        {/* Who they want to meet comes from their profile, not a filter here. */}
+        <View style={{ gap: 4 }}>
+          <Txt bold size={14}>Showing</Txt>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+            <Txt>{seekingLabel}</Txt>
+            <Btn size="sm" kind="secondary" label="Change in profile" onPress={() => router.push('/me?tab=profile')} />
+          </View>
+        </View>
         <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-end' }}>
           <View style={{ flex: 1 }}><Field label="Age from" keyboardType="number-pad" value={ageFrom} placeholder="18" onChangeText={(v) => setAgeFrom(digits(v))} onSubmitEditing={apply} /></View>
           <View style={{ flex: 1 }}><Field label="to" keyboardType="number-pad" value={ageTo} placeholder="99" onChangeText={(v) => setAgeTo(digits(v))} onSubmitEditing={apply} /></View>
